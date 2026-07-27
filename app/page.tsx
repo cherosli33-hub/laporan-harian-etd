@@ -9,7 +9,25 @@ const shifts: Shift[] = ["Pagi", "Petang", "Malam"];
 const steps = ["Maklumat asas", "Kakitangan", "Statistik kes", "Carry forward", "Laporan kes", "Ambulans", "Panggilan", "Semakan"];
 const labels: Record<StatKey, string> = { merah: "Merah", kuning: "Kuning", hijau: "Hijau", l1: "L1", l2: "L2", l3: "L3", l4: "L4", l5: "L5", asthmaBay: "Asthma Bay", oscc: "OSCC", kesBaru: "Kes Baru", kesUlangan: "Kes Ulangan", masukWad: "Masuk Wad" };
 const staffCategories = ["Pegawai Perubatan", "PPP", "Jururawat", "PPK", "Pemandu", "Lain-lain"];
+const shiftTimes: Record<Shift, string> = { Pagi: "7:00 pagi – 2:00 petang", Petang: "2:00 petang – 9:00 malam", Malam: "9:00 malam – 7:30 pagi" };
 const todayISO = () => new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kuala_Lumpur" });
+const malaysiaMinutes = () => {
+  const parts = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Kuala_Lumpur", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(new Date());
+  return Number(parts.find((part) => part.type === "hour")?.value || 0) * 60 + Number(parts.find((part) => part.type === "minute")?.value || 0);
+};
+const previousDateISO = (date: string) => {
+  const value = new Date(`${date}T12:00:00+08:00`);
+  value.setDate(value.getDate() - 1);
+  return value.toLocaleDateString("en-CA", { timeZone: "Asia/Kuala_Lumpur" });
+};
+const operationalDateISO = () => malaysiaMinutes() < 7 * 60 + 30 ? previousDateISO(todayISO()) : todayISO();
+const reportingDateForShift = (shift: Shift) => shift === "Malam" && malaysiaMinutes() < 7 * 60 + 30 ? previousDateISO(todayISO()) : todayISO();
+const currentShift = (): Shift => {
+  const minutes = malaysiaMinutes();
+  if (minutes >= 7 * 60 && minutes < 14 * 60) return "Pagi";
+  if (minutes >= 14 * 60 && minutes < 21 * 60) return "Petang";
+  return "Malam";
+};
 const formatDate = (date: string, short = false) => new Intl.DateTimeFormat("ms-MY", { day: "numeric", month: short ? "short" : "long", year: "numeric", timeZone: "Asia/Kuala_Lumpur" }).format(new Date(`${date}T12:00:00`));
 const derived = (r: Report) => ({
   merah: r.stats.l1 + r.stats.l2,
@@ -41,6 +59,7 @@ export default function Home() {
   const [filterShift, setFilterShift] = useState<Shift | "Semua">("Semua");
   const [statsPeriod, setStatsPeriod] = useState<"today" | "month">("month");
   const [ready, setReady] = useState(false);
+  const [previewOnly, setPreviewOnly] = useState(false);
 
   useEffect(() => {
     setReports(localReportRepository.getAll());
@@ -50,15 +69,15 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    if (!ready || view !== "form") return;
+    if (!ready || view !== "form" || previewOnly) return;
     const timer = window.setTimeout(() => {
       localReportRepository.saveDraft(withDerived({ ...draft, id: `${draft.date}_${draft.shift}` }));
       setDrafts(localReportRepository.getDrafts());
     }, 250);
     return () => window.clearTimeout(timer);
-  }, [draft, ready, view]);
+  }, [draft, previewOnly, ready, view]);
 
-  const today = todayISO();
+  const today = operationalDateISO();
   const todaysReports = useMemo(() => reports.filter((r) => r.date === today), [reports, today]);
   const filtered = useMemo(() => reports.filter((r) => (!filterDate || r.date === filterDate) && (filterShift === "Semua" || r.shift === filterShift)).sort((a, b) => `${b.date}${b.shift}`.localeCompare(`${a.date}${a.shift}`)), [reports, filterDate, filterShift]);
   const statReports = useMemo(() => statsPeriod === "today" ? reports.filter((r) => r.date === today) : reports.filter((r) => r.date.startsWith(today.slice(0, 7))), [reports, statsPeriod, today]);
@@ -72,19 +91,21 @@ export default function Home() {
     setView("dashboard");
     setStep(0);
   };
-  const startReport = (shift: Shift, date = today) => {
+  const startReport = (shift: Shift, date = reportingDateForShift(shift)) => {
     const existing = reports.find((r) => r.id === `${date}_${shift}`);
     const remembered = localReportRepository.getDraft(`${date}_${shift}`);
+    setPreviewOnly(false);
     setDraft(remembered ? structuredClone(remembered) : existing ? structuredClone(existing) : emptyReport(date, shift));
     setStep(0);
     setView("form");
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
   const leaveForm = (nextView: View = "dashboard") => {
-    if (view === "form") {
+    if (view === "form" && !previewOnly) {
       localReportRepository.saveDraft(withDerived({ ...draft, id: `${draft.date}_${draft.shift}` }));
       setDrafts(localReportRepository.getDrafts());
     }
+    if (previewOnly) setPreviewOnly(false);
     setView(nextView);
   };
   const updateDraft = (patch: Partial<Report>) => setDraft((d) => ({ ...d, ...patch }));
@@ -98,7 +119,7 @@ export default function Home() {
     setReports(localReportRepository.getAll());
     notify("Laporan dipadam daripada peranti ini");
   };
-  const printReport = (report: Report) => { setDraft(structuredClone(report)); setStep(7); setView("form"); window.setTimeout(() => window.print(), 180); };
+  const printReport = (report: Report) => { setPreviewOnly(true); setDraft(structuredClone(report)); setStep(7); setView("form"); window.scrollTo({ top: 0, behavior: "smooth" }); };
   const dayTotals = summarize(todaysReports);
   const periodTotals = summarize(statReports);
 
@@ -112,7 +133,7 @@ export default function Home() {
       {!ready ? <div className="loading">Menyiapkan ruang laporan…</div> : null}
 
       {ready && view === "dashboard" && <div className="page page-dashboard">
-        <section className="hero"><div><p className="eyebrow">RINGKASAN HARI INI</p><h2>{formatDate(today)}</h2><p className="muted">Pantau status laporan bagi setiap syif.</p></div><button className="primary desktop-action" onClick={() => startReport("Pagi")}>+ Isi laporan</button></section>
+        <section className="hero"><div><p className="eyebrow">HARI OPERASI ETD</p><h2>{formatDate(today)}</h2><p className="muted">Syif Malam kekal pada tarikh mula syif sehingga 7:30 pagi.</p></div><button className="primary desktop-action" onClick={() => startReport(currentShift())}>+ Isi laporan</button></section>
         <section className="shift-grid">
           {shifts.map((shift, index) => {
             const report = todaysReports.find((r) => r.shift === shift);
@@ -121,7 +142,7 @@ export default function Home() {
             const zone = entry ? derived(entry) : null;
             return <article className={`shift-card shift-${index}`} key={shift}>
               <div className="shift-card-top"><span className="shift-icon">{index === 0 ? "☀" : index === 1 ? "◐" : "☾"}</span><span className={`status ${report ? "complete" : remembered ? "draft" : ""}`}>{report ? "Sudah diisi" : remembered ? "Draf disimpan" : "Belum diisi"}</span></div>
-              <h3>Syif {shift}</h3><p className="case-total"><strong>{entry ? totalCases(entry) : "—"}</strong> <span>jumlah kes</span></p>
+              <h3>Syif {shift}</h3><p className="shift-time">{shiftTimes[shift]}</p><p className="case-total"><strong>{entry ? totalCases(entry) : "—"}</strong> <span>jumlah kes</span></p>
               <div className="shift-zone-row" aria-label={`Pecahan zon syif ${shift}`}>
                 <span><i className="dot-red" />Merah <b>{zone?.merah ?? "—"}</b></span>
                 <span><i className="dot-yellow" />Kuning <b>{zone?.kuning ?? "—"}</b></span>
@@ -134,7 +155,7 @@ export default function Home() {
                 <span>Obs. Ward <b>{entry?.carry.observation ?? "—"}</b></span>
               </div>
               {report ? <p className="updated">Dikemas kini {new Date(report.updatedAt).toLocaleTimeString("ms-MY", { hour: "2-digit", minute: "2-digit" })}</p> : remembered ? <p className="updated">Boleh sambung tanpa isi semula</p> : <p className="updated">Tiada laporan lagi</p>}
-              <button className={report ? "secondary" : "primary"} onClick={() => startReport(shift)}>{report ? "Lihat & kemas kini" : remembered ? "Sambung draf" : "Mula laporan"} <span>→</span></button>
+              <button className={report ? "secondary" : "primary"} onClick={() => startReport(shift, today)}>{report ? "Lihat & kemas kini" : remembered ? "Sambung draf" : "Mula laporan"} <span>→</span></button>
             </article>;
           })}
         </section>
@@ -155,8 +176,8 @@ export default function Home() {
       </div>}
 
       {ready && view === "form" && <form className="page form-page" onSubmit={submit}>
-        <div className="form-heading no-print"><button type="button" className="back-btn" onClick={() => leaveForm("dashboard")}>←</button><div><p className="eyebrow">{reports.some((r) => r.id === draft.id) ? "KEMAS KINI LAPORAN" : "DRAF DISIMPAN AUTOMATIK"}</p><h2>{draft.shift} · {formatDate(draft.date, true)}</h2></div><span className="step-number">{step + 1}/{steps.length}</span></div>
-        <div className="stepper no-print">{steps.map((label, i) => <button type="button" key={label} className={i === step ? "active" : i < step ? "done" : ""} onClick={() => setStep(i)} aria-label={`Langkah ${i + 1}: ${label}`}><span>{i < step ? "✓" : i + 1}</span><small>{label}</small></button>)}</div>
+        <div className="form-heading no-print"><button type="button" className="back-btn" onClick={() => previewOnly ? leaveForm("records") : leaveForm("dashboard")}>←</button><div><p className="eyebrow">{previewOnly ? "PRATONTON CETAKAN" : reports.some((r) => r.id === draft.id) ? "KEMAS KINI LAPORAN" : "DRAF DISIMPAN AUTOMATIK"}</p><h2>{draft.shift} · {formatDate(draft.date, true)}</h2><small className="form-shift-time">{shiftTimes[draft.shift]}</small></div><span className="step-number">{previewOnly ? "Pratonton A4" : `${step + 1}/${steps.length}`}</span></div>
+        {!previewOnly ? <div className="stepper no-print">{steps.map((label, i) => <button type="button" key={label} className={i === step ? "active" : i < step ? "done" : ""} onClick={() => setStep(i)} aria-label={`Langkah ${i + 1}: ${label}`}><span>{i < step ? "✓" : i + 1}</span><small>{label}</small></button>)}</div> : null}
         <section className="form-card">
           {step === 0 && <Step title="Maklumat asas" subtitle="Pilih tarikh, syif dan masukkan nama orang yang mengisi laporan."><div className="field-grid">
             <Field label="Tarikh laporan"><input type="date" value={draft.date} onChange={(e) => updateDraft({ date: e.target.value, id: `${e.target.value}_${draft.shift}` })} required /></Field>
@@ -182,14 +203,14 @@ export default function Home() {
             </div></article>)}
           </div><button type="button" className="add-btn" onClick={() => setDraft((d) => ({ ...d, ambulances: [...d.ambulances, blankAmbulance()] }))}>+ Tambah perjalanan ambulans</button></Step>}
           {step === 6 && <Step title="Panggilan kecemasan" subtitle="Catat bilangan panggilan yang diterima mengikut sumber."><div className="counter-grid">{(["mecc", "operator", "awam", "palsu"] as const).map((key) => <Counter key={key} label={key === "mecc" ? "MECC / Call Centre" : key[0].toUpperCase() + key.slice(1)} value={draft.calls[key]} onChange={(v) => updateCall(key, v)} tone={key} />)}</div><div className="total-band"><span>Jumlah panggilan</span><strong>{totalCalls(draft)}</strong></div><Field label="Catatan panggilan" hint="Pilihan"><textarea rows={4} value={draft.callNotes} onChange={(e) => updateDraft({ callNotes: e.target.value })} placeholder="Maklumat tambahan…" /></Field></Step>}
-          {step === 7 && <Step title="Semakan akhir" subtitle="Semak semua maklumat sebelum menyimpan laporan."><ReportPreview report={draft} /><div className="review-actions no-print"><button type="button" className="secondary" onClick={() => window.print()}>⎙ Cetak A4</button><button type="submit" className="primary">Simpan laporan</button></div></Step>}
+          {step === 7 && <Step title={previewOnly ? "Pratonton cetakan" : "Semakan akhir"} subtitle={previewOnly ? "Semak susunan laporan A4 sebelum membuka pilihan cetak telefon." : "Semak semua maklumat sebelum menyimpan laporan."}><ReportPreview report={draft} /><div className="review-actions no-print">{previewOnly ? <><button type="button" className="secondary" onClick={() => leaveForm("records")}>← Kembali ke Rekod</button><button type="button" className="primary" onClick={() => window.print()}>⎙ Cetak Laporan</button></> : <><button type="button" className="secondary" onClick={() => window.print()}>⎙ Cetak A4</button><button type="submit" className="primary">Simpan laporan</button></>}</div></Step>}
         </section>
-        <div className="form-nav no-print"><button type="button" className="secondary" disabled={step === 0} onClick={() => setStep((s) => Math.max(0, s - 1))}>← Sebelum</button>{step < 7 ? <button type="button" className="primary" onClick={() => setStep((s) => Math.min(7, s + 1))}>Seterusnya →</button> : null}</div>
+        {!previewOnly ? <div className="form-nav no-print"><button type="button" className="secondary" disabled={step === 0} onClick={() => setStep((s) => Math.max(0, s - 1))}>← Sebelum</button>{step < 7 ? <button type="button" className="primary" onClick={() => setStep((s) => Math.min(7, s + 1))}>Seterusnya →</button> : null}</div> : null}
       </form>}
 
       {ready && view === "records" && <div className="page"><section className="hero"><div><p className="eyebrow">ARKIB PERANTI</p><h2>Rekod laporan</h2><p className="muted">Cari, lihat dan kemas kini laporan yang pernah disimpan.</p></div></section>
         <section className="filter-card"><Field label="Tarikh"><input type="date" value={filterDate} onChange={(e) => setFilterDate(e.target.value)} /></Field><Field label="Syif"><select value={filterShift} onChange={(e) => setFilterShift(e.target.value as Shift | "Semua")}><option>Semua</option>{shifts.map((s) => <option key={s}>{s}</option>)}</select></Field><button className="link-btn" onClick={() => { setFilterDate(""); setFilterShift("Semua"); }}>Kosongkan carian</button></section>
-        <section className="record-list">{filtered.length ? filtered.map((report) => <article className="record-card" key={report.id}><div className="date-tile"><strong>{new Date(`${report.date}T12:00:00`).getDate()}</strong><span>{new Date(`${report.date}T12:00:00`).toLocaleDateString("ms-MY", { month: "short" })}</span></div><div className="record-main"><span className="status complete">Syif {report.shift}</span><h3>{totalCases(report)} kes</h3><p>Diisi oleh {report.filledBy || "—"} · {report.staff.length} kakitangan</p></div><div className="record-metrics"><span><b>{derived(report).merah}</b> Merah</span><span><b>{derived(report).kuning}</b> Kuning</span><span><b>{derived(report).hijau}</b> Hijau</span></div><div className="record-actions"><button className="secondary" onClick={() => startReport(report.shift, report.date)}>Edit</button><button className="secondary" onClick={() => printReport(report)}>Cetak</button><button className="icon-btn danger" onClick={() => remove(report)} aria-label={`Padam laporan ${report.shift} ${report.date}`}>×</button></div></article>) : <Empty title="Tiada rekod ditemui" text="Cuba tarikh atau syif lain, atau cipta laporan baharu." />}</section>
+        <section className="record-list">{filtered.length ? filtered.map((report) => <article className="record-card" key={report.id}><div className="date-tile"><strong>{new Date(`${report.date}T12:00:00`).getDate()}</strong><span>{new Date(`${report.date}T12:00:00`).toLocaleDateString("ms-MY", { month: "short" })}</span></div><div className="record-main"><span className="status complete">Syif {report.shift}</span><h3>{totalCases(report)} kes</h3><p>{shiftTimes[report.shift]} · Diisi oleh {report.filledBy || "—"}</p></div><div className="record-metrics"><span><b>{derived(report).merah}</b> Merah</span><span><b>{derived(report).kuning}</b> Kuning</span><span><b>{derived(report).hijau}</b> Hijau</span></div><div className="record-actions"><button className="secondary" onClick={() => startReport(report.shift, report.date)}>Edit</button><button className="secondary" onClick={() => printReport(report)}>Pratonton</button><button className="icon-btn danger" onClick={() => remove(report)} aria-label={`Padam laporan ${report.shift} ${report.date}`}>×</button></div></article>) : <Empty title="Tiada rekod ditemui" text="Cuba tarikh atau syif lain, atau cipta laporan baharu." />}</section>
       </div>}
 
       {ready && view === "stats" && <div className="page"><section className="hero"><div><p className="eyebrow">ANALISIS DATA UJIAN</p><h2>Statistik ETD</h2><p className="muted">Ringkasan automatik daripada laporan dalam peranti ini.</p></div><div className="segmented period-switch"><button className={statsPeriod === "today" ? "selected" : ""} onClick={() => setStatsPeriod("today")}>Hari ini</button><button className={statsPeriod === "month" ? "selected" : ""} onClick={() => setStatsPeriod("month")}>Bulan ini</button></div></section>
@@ -198,7 +219,7 @@ export default function Home() {
         <section className="level-card"><div className="section-heading"><div><p className="eyebrow">PECAHAN LEVEL</p><h2>L1 hingga L5</h2></div></div><div className="level-grid">{(["l1", "l2", "l3", "l4", "l5"] as const).map((key) => <div key={key}><span>{key.toUpperCase()}</span><strong>{periodTotals[key]}</strong></div>)}</div></section>
       </div>}
 
-      <nav className="bottom-nav no-print" aria-label="Navigasi utama"><NavButton active={view === "dashboard"} icon="⌂" label="Utama" onClick={() => leaveForm("dashboard")} /><NavButton active={view === "form"} icon="+" label="Isi laporan" onClick={() => startReport("Pagi")} prominent /><NavButton active={view === "records"} icon="▤" label="Rekod" onClick={() => leaveForm("records")} /><NavButton active={view === "stats"} icon="▥" label="Statistik" onClick={() => leaveForm("stats")} /></nav>
+      <nav className="bottom-nav no-print" aria-label="Navigasi utama"><NavButton active={view === "dashboard"} icon="⌂" label="Utama" onClick={() => leaveForm("dashboard")} /><NavButton active={view === "form" && !previewOnly} icon="+" label="Isi laporan" onClick={() => startReport(currentShift())} prominent /><NavButton active={view === "records" || previewOnly} icon="▤" label="Rekod" onClick={() => leaveForm("records")} /><NavButton active={view === "stats"} icon="▥" label="Statistik" onClick={() => leaveForm("stats")} /></nav>
       {toast ? <div className="toast no-print">✓ {toast}</div> : null}
     </main>
   );
