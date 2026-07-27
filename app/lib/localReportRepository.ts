@@ -1,7 +1,7 @@
 import { Report } from "./types";
 
-// Gantikan lapisan ini dengan API Google Apps Script nanti. Skrin aplikasi
-// dan model data tidak perlu diubah apabila backend disambungkan.
+// Simpanan peranti untuk draf automatik. Rekod rasmi dihantar melalui
+// reportRepository kepada Google Apps Script dan Google Sheets.
 const STORAGE_KEY = "etd-laporan-harian:v1";
 const DRAFT_KEY = "etd-laporan-harian:drafts:v1";
 export const localReportRepository = {

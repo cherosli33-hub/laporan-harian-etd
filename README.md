@@ -1,15 +1,17 @@
 # Laporan Harian ETD – E.T.D Hospital Kuala Lipis
 
-PWA mobile-first untuk mengisi, melihat dan menganalisis laporan syif Pagi, Petang dan Malam. Versi ini ialah frontend sahaja; semua data ujian disimpan dalam `localStorage` peranti.
+PWA mobile-first untuk mengisi, melihat dan menganalisis laporan syif Pagi, Petang dan Malam. Rekod rasmi dikongsi melalui Google Apps Script dan Google Sheets; `localStorage` digunakan untuk draf automatik dan cache sementara sahaja.
 
 ## Ciri
 
 - Dashboard status tiga syif dan ringkasan harian
 - Satu laporan unik bagi gabungan tarikh + syif
 - Borang bertahap dengan input nombor mesra sentuhan
-- Kakitangan, statistik kes, carry forward, BID/DID, ambulans dan panggilan kecemasan
-- Simpan, edit, padam, cari dan cetak A4
-- Statistik hari dan bulan semasa
+- Kakitangan mengikut kategori dengan cadangan nama daripada rekod terdahulu
+- Statistik kes, carry forward, BID/DID, ambulans dan panggilan kecemasan
+- Simpan, edit, padam dan cari terus daripada Google Sheets
+- Statistik dan graf mingguan, bulanan serta tahunan
+- Pratonton A4 sebelum cetak
 - Manifest PWA dan service worker untuk luar talian asas
 - Responsif untuk Android, iPhone, tablet dan desktop
 
@@ -28,8 +30,11 @@ npm run dev
 npm run build
 ```
 
-## Sambungan Google Apps Script kemudian
+## Penyimpanan dan backend
 
-Semua operasi data berada dalam `app/lib/localReportRepository.ts`. Kekalkan kontrak `getAll`, `save` dan `remove`, kemudian gantikan implementasi `localStorage` dengan panggilan API Google Apps Script. Model data utama berada dalam `app/lib/types.ts`.
+- `app/lib/reportRepository.ts` – sambungan aplikasi kepada Google Apps Script
+- `app/lib/localReportRepository.ts` – draf automatik dan cache peranti
+- `backend/google-apps-script/Code.gs` – API dan pengiraan Google Sheets
+- `app/lib/types.ts` – model data utama
 
-Backend belum disambungkan dalam versi ini.
+Satu laporan kekal unik bagi gabungan `Tarikh + Syif`. Rekod ujian automatik dibersihkan selepas pengesahan.

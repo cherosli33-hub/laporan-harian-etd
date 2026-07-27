@@ -13,7 +13,7 @@ export async function generateMetadata(): Promise<Metadata> {
     title: "Laporan Harian ETD – Hospital Kuala Lipis",
     description: "PWA mobile-first untuk laporan syif harian E.T.D Hospital Kuala Lipis.",
     manifest: "/manifest.webmanifest",
-    icons: { icon: "/icon-192.png", apple: "/icon-192.png" },
+    icons: { icon: "/etd-logo.jpg", apple: "/etd-logo.jpg" },
     appleWebApp: { capable: true, statusBarStyle: "black-translucent", title: "Laporan ETD" },
     openGraph: { title: "Laporan Harian ETD", description: "E.T.D Hospital Kuala Lipis", images: [{ url: imageUrl, width: 1200, height: 630 }] },
     twitter: { card: "summary_large_image", title: "Laporan Harian ETD", description: "E.T.D Hospital Kuala Lipis", images: [imageUrl] },
