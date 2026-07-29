@@ -48,6 +48,29 @@ const withDerived = (r: Report): Report => {
 const totalCalls = (r: Report) => Object.values(r.calls).reduce((a, b) => a + b, 0);
 const blankStaff = (category = "Pegawai Perubatan") => ({ id: crypto.randomUUID(), name: "", category });
 const blankAmbulance = () => ({ id: crypto.randomUUID(), vehicleNo: "", destination: "", driver: "", timeOut: "", timeIn: "", unit: "" });
+const upsertReport = (list: Report[], report: Report) => {
+  const index = list.findIndex((item) => item.id === report.id);
+  if (index < 0) return [...list, report];
+  const next = list.slice();
+  next[index] = report;
+  return next;
+};
+const inPeriod = (date: string, period: StatsPeriod, anchor: string) => {
+  if (period === "day") return date === anchor;
+  if (period === "year") return date.slice(0, 4) === anchor.slice(0, 4);
+  if (period === "week") {
+    const anchorDate = new Date(`${anchor}T12:00:00`);
+    const day = (anchorDate.getDay() + 6) % 7;
+    const start = new Date(anchorDate);
+    start.setDate(anchorDate.getDate() - day);
+    const end = new Date(start);
+    end.setDate(start.getDate() + 6);
+    const startKey = start.toLocaleDateString("en-CA");
+    const endKey = end.toLocaleDateString("en-CA");
+    return date >= startKey && date <= endKey;
+  }
+  return date.slice(0, 7) === anchor.slice(0, 7);
+};
 
 export default function Home() {
   const [view, setView] = useState<View>("dashboard");
@@ -105,25 +128,25 @@ export default function Home() {
       .finally(() => setBusy(false));
   }, [statsAnchor, statsPeriod, view]);
 
+  const filledByOptions = useMemo(() => Array.from(new Set(reports.map((r) => r.filledBy).filter(Boolean))).sort((a, b) => a.localeCompare(b, "ms")), [reports]);
   const today = operationalDateISO();
   const todaysReports = useMemo(() => reports.filter((r) => r.date === today), [reports, today]);
   const filtered = useMemo(() => recordResults.slice().sort((a, b) => `${b.date}${b.shift}`.localeCompare(`${a.date}${a.shift}`)), [recordResults]);
-  const statReports = useMemo(() => reports.filter((r) => r.date.startsWith(statsAnchor.slice(0, 7))), [reports, statsAnchor]);
+  const statReports = useMemo(() => reports.filter((r) => inPeriod(r.date, statsPeriod, statsAnchor)), [reports, statsPeriod, statsAnchor]);
   const notify = (message: string) => { setToast(message); window.setTimeout(() => setToast(""), 2600); };
   const persist = async (report: Report) => {
     setBusy(true);
     try {
       const saved = await reportRepository.save(withDerived({ ...report, updatedAt: new Date().toISOString() }));
       localReportRepository.removeDraft(report.id);
-      const refreshed = await reportRepository.getAll();
-      setReports(refreshed);
-      setRecordResults(refreshed);
-      setStaffSuggestions(await reportRepository.getStaff());
+      setReports((prev) => upsertReport(prev, saved.report));
+      setRecordResults((prev) => upsertReport(prev, saved.report));
       setDrafts(localReportRepository.getDrafts());
       setSyncState("online");
       notify(saved.created ? "Laporan baharu disimpan ke Google Sheet" : "Laporan berjaya dikemas kini");
       setView("dashboard");
       setStep(0);
+      reportRepository.getStaff().then(setStaffSuggestions).catch(() => undefined);
     } catch (error) {
       setSyncState("offline");
       notify(error instanceof Error ? error.message : "Laporan tidak dapat disimpan.");
@@ -158,9 +181,8 @@ export default function Home() {
     setBusy(true);
     try {
       await reportRepository.remove(report.id);
-      const refreshed = await reportRepository.getAll();
-      setReports(refreshed);
-      setRecordResults(refreshed);
+      setReports((prev) => prev.filter((item) => item.id !== report.id));
+      setRecordResults((prev) => prev.filter((item) => item.id !== report.id));
       setSyncState("online");
       notify("Laporan dipadam daripada Google Sheet");
     } catch (error) {
@@ -246,7 +268,7 @@ export default function Home() {
           {step === 0 && <Step title="Maklumat asas" subtitle="Pilih tarikh, syif dan masukkan nama orang yang mengisi laporan."><div className="field-grid">
             <Field label="Tarikh laporan"><input type="date" value={draft.date} onChange={(e) => updateDraft({ date: e.target.value, id: `${e.target.value}_${draft.shift}` })} required /></Field>
             <Field label="Syif"><div className="segmented">{shifts.map((s) => <button type="button" key={s} className={draft.shift === s ? "selected" : ""} onClick={() => updateDraft({ shift: s, id: `${draft.date}_${s}` })}>{s}</button>)}</div></Field>
-            <Field label="Nama pengisi" hint="Wajib diisi"><input value={draft.filledBy} onChange={(e) => updateDraft({ filledBy: e.target.value })} placeholder="Contoh: Rosli" required /></Field>
+            <Field label="Nama pengisi" hint="Wajib diisi"><input list="filled-by-suggestions" value={draft.filledBy} onChange={(e) => updateDraft({ filledBy: e.target.value })} placeholder="Contoh: Rosli" autoComplete="off" required /><datalist id="filled-by-suggestions">{filledByOptions.map((name) => <option key={name} value={name} />)}</datalist></Field>
           </div></Step>}
           {step === 1 && <Step title="Kakitangan bertugas" subtitle="Isi mengikut kategori. Nama yang pernah direkod akan muncul sebagai cadangan."><div className="staff-category-list">
             {staffCategories.map((category) => {
@@ -286,8 +308,8 @@ export default function Home() {
         <section className="record-list">{filtered.length ? filtered.map((report) => <article className="record-card" key={report.id}><div className="date-tile"><strong>{new Date(`${report.date}T12:00:00`).getDate()}</strong><span>{new Date(`${report.date}T12:00:00`).toLocaleDateString("ms-MY", { month: "short" })}</span></div><div className="record-main"><span className="status complete">Syif {report.shift}</span><h3>{totalCases(report)} kes</h3><p>{shiftTimes[report.shift]} · Diisi oleh {report.filledBy || "—"}</p></div><div className="record-metrics"><span><b>{derived(report).merah}</b> Merah</span><span><b>{derived(report).kuning}</b> Kuning</span><span><b>{derived(report).hijau}</b> Hijau</span></div><div className="record-actions"><button className="secondary" onClick={() => startReport(report.shift, report.date)}>Edit</button><button className="secondary" onClick={() => printReport(report)}>Pratonton</button><button className="icon-btn danger" onClick={() => remove(report)} aria-label={`Padam laporan ${report.shift} ${report.date}`}>×</button></div></article>) : <Empty title="Tiada rekod ditemui" text="Cuba tarikh atau syif lain, atau cipta laporan baharu." />}</section>
       </div>}
 
-      {ready && view === "stats" && <div className="page"><section className="hero stats-hero"><div><p className="eyebrow">ANALISIS GOOGLE SHEET</p><h2>Statistik ETD</h2><p className="muted">Pilih minggu, bulan atau tahun untuk melihat jumlah dan graf tempoh tersebut sahaja.</p></div><PeriodPicker period={statsPeriod} anchor={statsAnchor} onPeriod={setStatsPeriod} onAnchor={setStatsAnchor} /></section>
-        <section className="stats-feature"><div><p>{statsPeriod === "week" ? "JUMLAH MINGGU DIPILIH" : statsPeriod === "month" ? "JUMLAH BULAN DIPILIH" : "JUMLAH TAHUN DIPILIH"}</p><strong>{busy ? "…" : periodTotals.cases}</strong><span>{remoteStats ? `${formatDate(remoteStats.start, true)} – ${formatDate(remoteStats.end, true)}` : "Mengambil data Google Sheet"}</span></div><div className="distribution">{[["Merah", periodTotals.merah, "#dc3f45"], ["Kuning", periodTotals.kuning, "#e0a300"], ["Hijau", periodTotals.hijau, "#14915f"]].map(([name, value, color]) => { const pct = periodTotals.cases ? Math.round((Number(value) / periodTotals.cases) * 100) : 0; return <div className="bar-row" key={name}><span>{name}</span><div><i style={{ width: `${pct}%`, background: color }} /></div><b>{value} <small>{pct}%</small></b></div>; })}</div></section>
+      {ready && view === "stats" && <div className="page"><section className="hero stats-hero"><div><p className="eyebrow">ANALISIS GOOGLE SHEET</p><h2>Statistik ETD</h2><p className="muted">Pilih hari, minggu, bulan atau tahun untuk melihat jumlah dan graf tempoh tersebut sahaja.</p></div><PeriodPicker period={statsPeriod} anchor={statsAnchor} onPeriod={setStatsPeriod} onAnchor={setStatsAnchor} /></section>
+        <section className="stats-feature"><div><p>{statsPeriod === "day" ? "JUMLAH HARI DIPILIH" : statsPeriod === "week" ? "JUMLAH MINGGU DIPILIH" : statsPeriod === "month" ? "JUMLAH BULAN DIPILIH" : "JUMLAH TAHUN DIPILIH"}</p><strong>{busy ? "…" : periodTotals.cases}</strong><span>{remoteStats ? `${formatDate(remoteStats.start, true)} – ${formatDate(remoteStats.end, true)}` : "Mengambil data Google Sheet"}</span></div><div className="distribution">{[["Merah", periodTotals.merah, "#dc3f45"], ["Kuning", periodTotals.kuning, "#e0a300"], ["Hijau", periodTotals.hijau, "#14915f"]].map(([name, value, color]) => { const pct = periodTotals.cases ? Math.round((Number(value) / periodTotals.cases) * 100) : 0; return <div className="bar-row" key={name}><span>{name}</span><div><i style={{ width: `${pct}%`, background: color }} /></div><b>{value} <small>{pct}%</small></b></div>; })}</div></section>
         <div className="metric-grid stats-grid"><Metric label="Masuk wad" value={periodTotals.ward} accent="blue" icon="▣" /><Metric label="Ambulans" value={periodTotals.ambulance} accent="orange" icon="➜" /><Metric label="Panggilan" value={periodTotals.calls} accent="emerald" icon="☎" /><Metric label="Asthma Bay" value={periodTotals.asthma} accent="purple" icon="◌" /><Metric label="OSCC" value={periodTotals.oscc} accent="pink" icon="◇" /><Metric label="BID / DID" value={`${periodTotals.bid} / ${periodTotals.did}`} accent="slate" icon="+" /></div>
         <section className="level-card"><div className="section-heading"><div><p className="eyebrow">PECAHAN LEVEL</p><h2>L1 hingga L5</h2></div></div><div className="level-grid">{(["l1", "l2", "l3", "l4", "l5"] as const).map((key) => <div key={key}><span>{key.toUpperCase()}</span><strong>{periodTotals[key]}</strong></div>)}</div></section>
         <section className="level-card chart-card"><div className="section-heading"><div><p className="eyebrow">GRAF TEMPOH DIPILIH</p><h2>Trend jumlah pesakit</h2></div></div><TrendChart groups={remoteStats?.groups || []} /></section>
@@ -323,10 +345,12 @@ function PeriodPicker({ period, anchor, onPeriod, onAnchor }: { period: StatsPer
   const years = Array.from({ length: 9 }, (_, index) => new Date().getFullYear() - 4 + index);
   return <div className="period-picker">
     <div className="segmented period-switch">
+      <button className={period === "day" ? "selected" : ""} onClick={() => onPeriod("day")}>Hari</button>
       <button className={period === "week" ? "selected" : ""} onClick={() => onPeriod("week")}>Minggu</button>
       <button className={period === "month" ? "selected" : ""} onClick={() => onPeriod("month")}>Bulan</button>
       <button className={period === "year" ? "selected" : ""} onClick={() => onPeriod("year")}>Tahun</button>
     </div>
+    {period === "day" ? <input aria-label="Pilih hari" type="date" value={anchor} onChange={(event) => onAnchor(event.target.value)} /> : null}
     {period === "week" ? <input aria-label="Pilih minggu" type="date" value={anchor} onChange={(event) => onAnchor(event.target.value)} /> : null}
     {period === "month" ? <input aria-label="Pilih bulan" type="month" value={anchor.slice(0, 7)} onChange={(event) => onAnchor(`${event.target.value}-01`)} /> : null}
     {period === "year" ? <select aria-label="Pilih tahun" value={currentYear} onChange={(event) => onAnchor(`${event.target.value}-01-01`)}>{years.map((year) => <option key={year}>{year}</option>)}</select> : null}

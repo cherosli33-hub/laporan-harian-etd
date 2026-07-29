@@ -5,7 +5,7 @@ const CACHE_KEY = "etd-laporan-harian:server-cache:v1";
 const CHANNEL = "etd-report-sheet";
 
 export type StaffSuggestion = { name: string; category: string; uses: number; lastUsed: string };
-export type StatsPeriod = "week" | "month" | "year";
+export type StatsPeriod = "day" | "week" | "month" | "year";
 export type StatsTotals = {
   cases: number; merah: number; kuning: number; hijau: number;
   l1: number; l2: number; l3: number; l4: number; l5: number;

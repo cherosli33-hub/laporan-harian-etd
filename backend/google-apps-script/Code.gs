@@ -147,7 +147,7 @@ function listStaffDirectory_() {
 }
 
 function getStats_(parameters) {
-  const period = ["week", "month", "year"].includes(parameters.period) ? parameters.period : "month";
+  const period = ["day", "week", "month", "year"].includes(parameters.period) ? parameters.period : "month";
   const anchor = parseDateKey_(parameters.anchor) || new Date();
   const range = periodRange_(period, anchor);
   const reports = listReports_({ start: range.start, end: range.end, limit: 1000 });
@@ -297,12 +297,22 @@ function rebuildStaffDirectory_(spreadsheet) {
 }
 
 function refreshDailySummary_(spreadsheet) {
-  const reports = listReports_({ limit: 1000 });
+  const sheet = spreadsheet.getSheetByName(ETD_CONFIG.REPORTS);
   const byDate = {};
-  reports.forEach(function (report) {
-    if (!byDate[report.date]) byDate[report.date] = emptyTotals_();
-    addReportTotals_(byDate[report.date], report);
-  });
+  if (sheet && sheet.getLastRow() >= 2) {
+    const rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, REPORT_HEADERS.length).getValues();
+    rows.forEach(function (row) {
+      if (!clean_(row[0])) return;
+      const date = dateKey_(row[1]);
+      if (!byDate[date]) byDate[date] = emptyDailyTotals_();
+      const totals = byDate[date];
+      totals.l1 += number_(row[4]); totals.l2 += number_(row[5]); totals.l3 += number_(row[6]);
+      totals.l4 += number_(row[7]); totals.l5 += number_(row[8]); totals.asthma += number_(row[9]);
+      totals.oscc += number_(row[10]); totals.merah += number_(row[11]); totals.kuning += number_(row[12]);
+      totals.hijau += number_(row[13]); totals.kesBaru += number_(row[14]); totals.kesUlangan += number_(row[15]);
+      totals.cases += number_(row[16]); totals.ward += number_(row[17]);
+    });
+  }
   const target = spreadsheet.getSheetByName(ETD_CONFIG.DAILY);
   clearBody_(target, 15);
   const rows = Object.keys(byDate).sort().map(function (date) {
@@ -310,6 +320,10 @@ function refreshDailySummary_(spreadsheet) {
     return [dateValue_(date), value.l1, value.l2, value.l3, value.l4, value.l5, value.asthma, value.oscc, value.merah, value.kuning, value.hijau, value.kesBaru, value.kesUlangan, value.cases, value.ward];
   });
   if (rows.length) target.getRange(2, 1, rows.length, 15).setValues(rows);
+}
+
+function emptyDailyTotals_() {
+  return { l1: 0, l2: 0, l3: 0, l4: 0, l5: 0, asthma: 0, oscc: 0, merah: 0, kuning: 0, hijau: 0, kesBaru: 0, kesUlangan: 0, cases: 0, ward: 0 };
 }
 
 function emptyTotals_() {
@@ -337,7 +351,10 @@ function periodRange_(period, anchor) {
   const date = new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate());
   let start;
   let end;
-  if (period === "week") {
+  if (period === "day") {
+    start = date;
+    end = date;
+  } else if (period === "week") {
     const day = (date.getDay() + 6) % 7;
     start = new Date(date); start.setDate(date.getDate() - day);
     end = new Date(start); end.setDate(start.getDate() + 6);
