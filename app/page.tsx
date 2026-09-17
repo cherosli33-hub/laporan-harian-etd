@@ -143,7 +143,7 @@ export default function Home() {
       setRecordResults((prev) => upsertReport(prev, saved.report));
       setDrafts(localReportRepository.getDrafts());
       setSyncState("online");
-      notify(saved.created ? "Laporan baharu disimpan ke Google Sheet" : "Laporan berjaya dikemas kini");
+      notify(saved.created ? "Laporan baharu disimpan ke Firebase" : "Laporan berjaya dikemas kini");
       setView("dashboard");
       setStep(0);
       reportRepository.getStaff().then(setStaffSuggestions).catch(() => undefined);
@@ -184,7 +184,7 @@ export default function Home() {
       setReports((prev) => prev.filter((item) => item.id !== report.id));
       setRecordResults((prev) => prev.filter((item) => item.id !== report.id));
       setSyncState("online");
-      notify("Laporan dipadam daripada Google Sheet");
+      notify("Laporan dipadam daripada Firebase");
     } catch (error) {
       setSyncState("offline");
       notify(error instanceof Error ? error.message : "Laporan tidak dapat dipadam.");
@@ -201,7 +201,7 @@ export default function Home() {
       notify(`${found.length} rekod ditemui`);
     } catch (error) {
       setSyncState("offline");
-      notify(error instanceof Error ? error.message : "Carian Google Sheet gagal.");
+      notify(error instanceof Error ? error.message : "Carian Firebase gagal.");
     } finally {
       setBusy(false);
     }
@@ -214,7 +214,7 @@ export default function Home() {
     <main className="app-shell">
       <header className="topbar no-print">
         <div className="brand"><img className="brand-logo" src="/etd-logo.jpg" alt="Logo Jabatan Kecemasan dan Trauma Hospital Kuala Lipis" /><div><p className="eyebrow">E.T.D HOSPITAL KUALA LIPIS</p><h1>Laporan Harian ETD</h1></div></div>
-        <span className={`sync-badge ${syncState}`}><i />{syncState === "online" ? "Google Sheet aktif" : syncState === "loading" ? "Menyambung…" : "Draf luar talian"}</span>
+        <span className={`sync-badge ${syncState}`}><i />{syncState === "online" ? "🔥 Firebase aktif" : syncState === "loading" ? "Menyambung…" : "Draf luar talian"}</span>
       </header>
       {!ready ? <div className="loading">Menyiapkan ruang laporan…</div> : null}
 
@@ -298,18 +298,18 @@ export default function Home() {
             </div></article>)}
           </div><button type="button" className="add-btn" onClick={() => setDraft((d) => ({ ...d, ambulances: [...d.ambulances, blankAmbulance()] }))}>+ Tambah perjalanan ambulans</button></Step>}
           {step === 6 && <Step title="Panggilan kecemasan" subtitle="Catat bilangan panggilan yang diterima mengikut sumber."><div className="counter-grid">{(["mecc", "operator", "awam", "palsu"] as const).map((key) => <Counter key={key} label={key === "mecc" ? "MECC / Call Centre" : key[0].toUpperCase() + key.slice(1)} value={draft.calls[key]} onChange={(v) => updateCall(key, v)} tone={key} />)}</div><div className="total-band"><span>Jumlah panggilan</span><strong>{totalCalls(draft)}</strong></div><Field label="Catatan panggilan" hint="Pilihan"><textarea rows={4} value={draft.callNotes} onChange={(e) => updateDraft({ callNotes: e.target.value })} placeholder="Maklumat tambahan…" /></Field></Step>}
-          {step === 7 && <Step title={previewOnly ? "Pratonton cetakan" : "Semakan akhir"} subtitle={previewOnly ? "Semak susunan laporan A4 sebelum membuka pilihan cetak telefon." : "Semak semua maklumat sebelum menyimpan laporan ke Google Sheet."}><ReportPreview report={draft} /><div className="review-actions no-print">{previewOnly ? <><button type="button" className="secondary" onClick={() => leaveForm("records")}>← Kembali ke Rekod</button><button type="button" className="primary" onClick={() => window.print()}>⎙ Cetak Laporan</button></> : <><button type="button" className="secondary" onClick={() => window.print()}>⎙ Cetak A4</button><button type="submit" className="primary" disabled={busy}>{busy ? "Menyimpan…" : "Simpan ke Google Sheet"}</button></>}</div></Step>}
+          {step === 7 && <Step title={previewOnly ? "Pratonton cetakan" : "Semakan akhir"} subtitle={previewOnly ? "Semak susunan laporan A4 sebelum membuka pilihan cetak telefon." : "Semak semua maklumat sebelum menyimpan laporan ke Firebase."}><ReportPreview report={draft} /><div className="review-actions no-print">{previewOnly ? <><button type="button" className="secondary" onClick={() => leaveForm("records")}>← Kembali ke Rekod</button><button type="button" className="primary" onClick={() => window.print()}>⎙ Cetak Laporan</button></> : <><button type="button" className="secondary" onClick={() => window.print()}>⎙ Cetak A4</button><button type="submit" className="primary" disabled={busy}>{busy ? "Menyimpan…" : "Simpan ke Firebase"}</button></>}</div></Step>}
         </section>
         {!previewOnly ? <div className="form-nav no-print"><button type="button" className="secondary" disabled={step === 0} onClick={() => setStep((s) => Math.max(0, s - 1))}>← Sebelum</button>{step < 7 ? <button type="button" className="primary" onClick={() => setStep((s) => Math.min(7, s + 1))}>Seterusnya →</button> : null}</div> : null}
       </form>}
 
-      {ready && view === "records" && <div className="page"><section className="hero"><div><p className="eyebrow">REKOD GOOGLE SHEET</p><h2>Rekod laporan</h2><p className="muted">Cari, lihat dan kemas kini laporan yang dikongsi oleh semua staf.</p></div></section>
+      {ready && view === "records" && <div className="page"><section className="hero"><div><p className="eyebrow">🔥 REKOD FIREBASE</p><h2>Rekod laporan</h2><p className="muted">Cari, lihat dan kemas kini laporan yang dikongsi oleh semua staf.</p></div></section>
         <section className="filter-card"><Field label="Tarikh"><input type="date" value={filterDate} onChange={(e) => setFilterDate(e.target.value)} /></Field><Field label="Syif"><select value={filterShift} onChange={(e) => setFilterShift(e.target.value as Shift | "Semua")}><option>Semua</option>{shifts.map((s) => <option key={s}>{s}</option>)}</select></Field><div className="filter-actions"><button className="primary" disabled={busy} onClick={() => void searchRecords()}>{busy ? "Mencari…" : "Cari Rekod"}</button><button className="link-btn" onClick={() => { setFilterDate(""); setFilterShift("Semua"); setRecordResults(reports); }}>Kosongkan</button></div></section>
         <section className="record-list">{filtered.length ? filtered.map((report) => <article className="record-card" key={report.id}><div className="date-tile"><strong>{new Date(`${report.date}T12:00:00`).getDate()}</strong><span>{new Date(`${report.date}T12:00:00`).toLocaleDateString("ms-MY", { month: "short" })}</span></div><div className="record-main"><span className="status complete">Syif {report.shift}</span><h3>{totalCases(report)} kes</h3><p>{shiftTimes[report.shift]} · Diisi oleh {report.filledBy || "—"}</p></div><div className="record-metrics"><span><b>{derived(report).merah}</b> Merah</span><span><b>{derived(report).kuning}</b> Kuning</span><span><b>{derived(report).hijau}</b> Hijau</span></div><div className="record-actions"><button className="secondary" onClick={() => startReport(report.shift, report.date)}>Edit</button><button className="secondary" onClick={() => printReport(report)}>Pratonton</button><button className="icon-btn danger" onClick={() => remove(report)} aria-label={`Padam laporan ${report.shift} ${report.date}`}>×</button></div></article>) : <Empty title="Tiada rekod ditemui" text="Cuba tarikh atau syif lain, atau cipta laporan baharu." />}</section>
       </div>}
 
-      {ready && view === "stats" && <div className="page"><section className="hero stats-hero"><div><p className="eyebrow">ANALISIS GOOGLE SHEET</p><h2>Statistik ETD</h2><p className="muted">Pilih hari, minggu, bulan atau tahun untuk melihat jumlah dan graf tempoh tersebut sahaja.</p></div><PeriodPicker period={statsPeriod} anchor={statsAnchor} onPeriod={setStatsPeriod} onAnchor={setStatsAnchor} /></section>
-        <section className="stats-feature"><div><p>{statsPeriod === "day" ? "JUMLAH HARI DIPILIH" : statsPeriod === "week" ? "JUMLAH MINGGU DIPILIH" : statsPeriod === "month" ? "JUMLAH BULAN DIPILIH" : "JUMLAH TAHUN DIPILIH"}</p><strong>{busy ? "…" : periodTotals.cases}</strong><span>{remoteStats ? `${formatDate(remoteStats.start, true)} – ${formatDate(remoteStats.end, true)}` : "Mengambil data Google Sheet"}</span></div><div className="distribution">{[["Merah", periodTotals.merah, "#dc3f45"], ["Kuning", periodTotals.kuning, "#e0a300"], ["Hijau", periodTotals.hijau, "#14915f"]].map(([name, value, color]) => { const pct = periodTotals.cases ? Math.round((Number(value) / periodTotals.cases) * 100) : 0; return <div className="bar-row" key={name}><span>{name}</span><div><i style={{ width: `${pct}%`, background: color }} /></div><b>{value} <small>{pct}%</small></b></div>; })}</div></section>
+      {ready && view === "stats" && <div className="page"><section className="hero stats-hero"><div><p className="eyebrow">🔥 ANALISIS FIREBASE</p><h2>Statistik ETD</h2><p className="muted">Pilih hari, minggu, bulan atau tahun untuk melihat jumlah dan graf tempoh tersebut sahaja.</p></div><PeriodPicker period={statsPeriod} anchor={statsAnchor} onPeriod={setStatsPeriod} onAnchor={setStatsAnchor} /></section>
+        <section className="stats-feature"><div><p>{statsPeriod === "day" ? "JUMLAH HARI DIPILIH" : statsPeriod === "week" ? "JUMLAH MINGGU DIPILIH" : statsPeriod === "month" ? "JUMLAH BULAN DIPILIH" : "JUMLAH TAHUN DIPILIH"}</p><strong>{busy ? "…" : periodTotals.cases}</strong><span>{remoteStats ? `${formatDate(remoteStats.start, true)} – ${formatDate(remoteStats.end, true)}` : "Mengambil data Firebase"}</span></div><div className="distribution">{[["Merah", periodTotals.merah, "#dc3f45"], ["Kuning", periodTotals.kuning, "#e0a300"], ["Hijau", periodTotals.hijau, "#14915f"]].map(([name, value, color]) => { const pct = periodTotals.cases ? Math.round((Number(value) / periodTotals.cases) * 100) : 0; return <div className="bar-row" key={name}><span>{name}</span><div><i style={{ width: `${pct}%`, background: color }} /></div><b>{value} <small>{pct}%</small></b></div>; })}</div></section>
         <div className="metric-grid stats-grid"><Metric label="Masuk wad" value={periodTotals.ward} accent="blue" icon="▣" /><Metric label="Ambulans" value={periodTotals.ambulance} accent="orange" icon="➜" /><Metric label="Panggilan" value={periodTotals.calls} accent="emerald" icon="☎" /><Metric label="Asthma Bay" value={periodTotals.asthma} accent="purple" icon="◌" /><Metric label="OSCC" value={periodTotals.oscc} accent="pink" icon="◇" /><Metric label="BID / DID" value={`${periodTotals.bid} / ${periodTotals.did}`} accent="slate" icon="+" /></div>
         <section className="level-card"><div className="section-heading"><div><p className="eyebrow">PECAHAN LEVEL</p><h2>L1 hingga L5</h2></div></div><div className="level-grid">{(["l1", "l2", "l3", "l4", "l5"] as const).map((key) => <div key={key}><span>{key.toUpperCase()}</span><strong>{periodTotals[key]}</strong></div>)}</div></section>
         <section className="level-card chart-card"><div className="section-heading"><div><p className="eyebrow">GRAF TEMPOH DIPILIH</p><h2>Trend jumlah pesakit</h2></div></div><TrendChart groups={remoteStats?.groups || []} /></section>
