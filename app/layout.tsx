@@ -5,7 +5,7 @@ import "./globals.css";
 const geist = Geist({ variable: "--font-geist", subsets: ["latin"] });
 const siteUrl =
   process.env.NEXT_PUBLIC_SITE_URL ??
-  "https://laporan-harian-etd-klipis.pages.dev";
+  "https://laporan-harian-etd-k-lipis.pages.dev";
 
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
