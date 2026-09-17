@@ -1,13 +1,14 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { Report, Shift, StatKey, emptyReport } from "./lib/types";
+import { Report, Shift, StatKey, emptyReport, normalizeReport } from "./lib/types";
 import { localReportRepository } from "./lib/localReportRepository";
-import { RemoteStats, StaffSuggestion, StatsPeriod, reportRepository } from "./lib/reportRepository";
+import { RemoteStats, StatsPeriod, reportRepository } from "./lib/reportRepository";
+import { suggestionStore, type SuggestionKind } from "./lib/suggestionStore";
 
 type View = "dashboard" | "form" | "records" | "stats";
 const shifts: Shift[] = ["Pagi", "Petang", "Malam"];
-const steps = ["Maklumat asas", "Kakitangan", "Statistik kes", "Carry forward", "Laporan kes", "Ambulans", "Panggilan", "Semakan"];
+const steps = ["Maklumat asas", "Kakitangan", "Statistik kes", "Carry forward", "Laporan kes", "Ambulans & Kenderaan", "Panggilan", "Semakan"];
 const labels: Record<StatKey, string> = { merah: "Merah", kuning: "Kuning", hijau: "Hijau", l1: "L1", l2: "L2", l3: "L3", l4: "L4", l5: "L5", asthmaBay: "Asthma Bay", oscc: "OSCC", kesBaru: "Kes Baru", kesUlangan: "Kes Ulangan", masukWad: "Masuk Wad" };
 const staffCategories = ["Pegawai Perubatan", "PPP", "Nurse/Jururawat", "PPK", "Pemandu Ambulans"];
 const shiftTimes: Record<Shift, string> = { Pagi: "7:00 pagi – 2:00 petang", Petang: "2:00 petang – 9:00 malam", Malam: "9:00 malam – 7:30 pagi" };
@@ -47,7 +48,7 @@ const withDerived = (r: Report): Report => {
 };
 const totalCalls = (r: Report) => Object.values(r.calls).reduce((a, b) => a + b, 0);
 const blankStaff = (category = "Pegawai Perubatan") => ({ id: crypto.randomUUID(), name: "", category });
-const blankAmbulance = () => ({ id: crypto.randomUUID(), vehicleNo: "", destination: "", driver: "", timeOut: "", timeIn: "", unit: "" });
+const blankAmbulance = () => ({ id: crypto.randomUUID(), vehicleNo: "", destination: "", driver: "", drivers: [""], timeOut: "", timeIn: "", unit: "" });
 const upsertReport = (list: Report[], report: Report) => {
   const index = list.findIndex((item) => item.id === report.id);
   if (index < 0) return [...list, report];
@@ -55,23 +56,6 @@ const upsertReport = (list: Report[], report: Report) => {
   next[index] = report;
   return next;
 };
-const inPeriod = (date: string, period: StatsPeriod, anchor: string) => {
-  if (period === "day") return date === anchor;
-  if (period === "year") return date.slice(0, 4) === anchor.slice(0, 4);
-  if (period === "week") {
-    const anchorDate = new Date(`${anchor}T12:00:00`);
-    const day = (anchorDate.getDay() + 6) % 7;
-    const start = new Date(anchorDate);
-    start.setDate(anchorDate.getDate() - day);
-    const end = new Date(start);
-    end.setDate(start.getDate() + 6);
-    const startKey = start.toLocaleDateString("en-CA");
-    const endKey = end.toLocaleDateString("en-CA");
-    return date >= startKey && date <= endKey;
-  }
-  return date.slice(0, 7) === anchor.slice(0, 7);
-};
-
 export default function Home() {
   const [view, setView] = useState<View>("dashboard");
   const [reports, setReports] = useState<Report[]>([]);
@@ -80,9 +64,13 @@ export default function Home() {
   const [step, setStep] = useState(0);
   const [toast, setToast] = useState("");
   const [filterDate, setFilterDate] = useState("");
+  const [filterEndDate, setFilterEndDate] = useState("");
   const [filterShift, setFilterShift] = useState<Shift | "Semua">("Semua");
   const [recordResults, setRecordResults] = useState<Report[]>([]);
-  const [staffSuggestions, setStaffSuggestions] = useState<StaffSuggestion[]>([]);
+  const [, setSuggestionVersion] = useState(0);
+  const [nextPageToken, setNextPageToken] = useState("");
+  const [currentPageToken, setCurrentPageToken] = useState("");
+  const [pageHistory, setPageHistory] = useState<string[]>([]);
   const [statsPeriod, setStatsPeriod] = useState<StatsPeriod>("month");
   const [statsAnchor, setStatsAnchor] = useState(todayISO());
   const [remoteStats, setRemoteStats] = useState<RemoteStats | null>(null);
@@ -92,20 +80,20 @@ export default function Home() {
   const [previewOnly, setPreviewOnly] = useState(false);
 
   useEffect(() => {
-    setDrafts(localReportRepository.getDrafts());
-    setReady(true);
+    queueMicrotask(() => {
+      setDrafts(localReportRepository.getDrafts());
+      setReady(true);
+    });
     if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => undefined);
-    Promise.all([reportRepository.getAll(), reportRepository.getStaff()])
-      .then(([serverReports, names]) => {
+    const today = operationalDateISO();
+    reportRepository.getByDate(today)
+      .then((serverReports) => {
         setReports(serverReports);
-        setRecordResults(serverReports);
-        setStaffSuggestions(names);
         setSyncState("online");
       })
       .catch(() => {
-        const cached = reportRepository.cachedReports();
+        const cached = reportRepository.cachedReports(today);
         setReports(cached);
-        setRecordResults(cached);
         setSyncState("offline");
       });
   }, []);
@@ -119,25 +107,18 @@ export default function Home() {
     return () => window.clearTimeout(timer);
   }, [draft, previewOnly, ready, view]);
 
-  useEffect(() => {
-    if (view !== "stats") return;
-    setBusy(true);
-    reportRepository.getStats(statsPeriod, statsAnchor)
-      .then((stats) => { setRemoteStats(stats); setSyncState("online"); })
-      .catch(() => setSyncState("offline"))
-      .finally(() => setBusy(false));
-  }, [statsAnchor, statsPeriod, view]);
-
-  const filledByOptions = useMemo(() => Array.from(new Set(reports.map((r) => r.filledBy).filter(Boolean))).sort((a, b) => a.localeCompare(b, "ms")), [reports]);
+  const suggestionValues = (kind: SuggestionKind) => suggestionStore.values(kind);
+  const filledByOptions = suggestionValues("people");
   const today = operationalDateISO();
   const todaysReports = useMemo(() => reports.filter((r) => r.date === today), [reports, today]);
   const filtered = useMemo(() => recordResults.slice().sort((a, b) => `${b.date}${b.shift}`.localeCompare(`${a.date}${a.shift}`)), [recordResults]);
-  const statReports = useMemo(() => reports.filter((r) => inPeriod(r.date, statsPeriod, statsAnchor)), [reports, statsPeriod, statsAnchor]);
   const notify = (message: string) => { setToast(message); window.setTimeout(() => setToast(""), 2600); };
   const persist = async (report: Report) => {
     setBusy(true);
     try {
       const saved = await reportRepository.save(withDerived({ ...report, updatedAt: new Date().toISOString() }));
+      suggestionStore.remember(saved.report);
+      setSuggestionVersion((value) => value + 1);
       localReportRepository.removeDraft(report.id);
       setReports((prev) => upsertReport(prev, saved.report));
       setRecordResults((prev) => upsertReport(prev, saved.report));
@@ -146,7 +127,6 @@ export default function Home() {
       notify(saved.created ? "Laporan baharu disimpan ke Firebase" : "Laporan berjaya dikemas kini");
       setView("dashboard");
       setStep(0);
-      reportRepository.getStaff().then(setStaffSuggestions).catch(() => undefined);
     } catch (error) {
       setSyncState("offline");
       notify(error instanceof Error ? error.message : "Laporan tidak dapat disimpan.");
@@ -158,7 +138,7 @@ export default function Home() {
     const existing = reports.find((r) => r.id === `${date}_${shift}`);
     const remembered = localReportRepository.getDraft(`${date}_${shift}`);
     setPreviewOnly(false);
-    setDraft(remembered ? structuredClone(remembered) : existing ? structuredClone(existing) : emptyReport(date, shift));
+    setDraft(normalizeReport(remembered ? structuredClone(remembered) : existing ? structuredClone(existing) : emptyReport(date, shift)));
     setStep(0);
     setView("form");
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -195,10 +175,14 @@ export default function Home() {
   const searchRecords = async () => {
     setBusy(true);
     try {
-      const found = await reportRepository.getAll({ date: filterDate, shift: filterShift === "Semua" ? "" : filterShift });
-      setRecordResults(found);
+      if (filterDate) {
+        const found = await reportRepository.getRange(filterDate, filterEndDate || filterDate, filterShift);
+        setRecordResults(found); setCurrentPageToken(""); setNextPageToken(""); setPageHistory([]); notify(`${found.length} rekod ditemui`);
+      } else {
+        const page = await reportRepository.getPage(10, "", filterShift);
+        setRecordResults(page.reports); setCurrentPageToken(""); setNextPageToken(page.nextPageToken); setPageHistory([]); notify(`${page.reports.length} rekod dipaparkan`);
+      }
       setSyncState("online");
-      notify(`${found.length} rekod ditemui`);
     } catch (error) {
       setSyncState("offline");
       notify(error instanceof Error ? error.message : "Carian Firebase gagal.");
@@ -206,9 +190,21 @@ export default function Home() {
       setBusy(false);
     }
   };
+  const loadRecordPage = async (token: string, history: string[]) => {
+    setBusy(true);
+    try { const page = await reportRepository.getPage(10, token, filterShift); setRecordResults(page.reports); setCurrentPageToken(token); setNextPageToken(page.nextPageToken); setPageHistory(history); setSyncState("online"); }
+    catch (error) { setSyncState("offline"); notify(error instanceof Error ? error.message : "Halaman rekod gagal dimuatkan."); }
+    finally { setBusy(false); }
+  };
+  const loadStats = async () => {
+    setBusy(true);
+    try { setRemoteStats(await reportRepository.getStats(statsPeriod, statsAnchor)); setSyncState("online"); }
+    catch (error) { setSyncState("offline"); notify(error instanceof Error ? error.message : "Statistik gagal dimuatkan."); }
+    finally { setBusy(false); }
+  };
   const printReport = (report: Report) => { setPreviewOnly(true); setDraft(structuredClone(report)); setStep(7); setView("form"); window.scrollTo({ top: 0, behavior: "smooth" }); };
   const dayTotals = summarize(todaysReports);
-  const periodTotals = remoteStats?.totals || summarize(statReports);
+  const periodTotals = remoteStats?.totals || summarize([]);
 
   return (
     <main className="app-shell">
@@ -273,11 +269,11 @@ export default function Home() {
           {step === 1 && <Step title="Kakitangan bertugas" subtitle="Isi mengikut kategori. Nama yang pernah direkod akan muncul sebagai cadangan."><div className="staff-category-list">
             {staffCategories.map((category) => {
               const people = draft.staff.filter((person) => person.category === category);
-              const options = staffSuggestions.filter((item) => item.category === category);
+              const options = suggestionValues("people");
               const listId = `staff-${category.replace(/\W/g, "-")}`;
               return <section className="staff-category-card" key={category}>
                 <div className="staff-category-title"><div><span>{staffCategories.indexOf(category) + 1}</span><h3>{category}</h3></div><button type="button" onClick={() => setDraft((d) => ({ ...d, staff: [...d.staff, blankStaff(category)] }))}>+ Tambah nama</button></div>
-                <datalist id={listId}>{options.map((item) => <option key={`${category}-${item.name}`} value={item.name}>{item.uses} kali digunakan</option>)}</datalist>
+                <datalist id={listId}>{options.map((name) => <option key={`${category}-${name}`} value={name} />)}</datalist>
                 {people.length ? <div className="staff-name-list">{people.map((person, i) => <div className="staff-name-row" key={person.id}><span>{i + 1}</span><input list={listId} aria-label={`Nama ${category} ${i + 1}`} value={person.name} onChange={(e) => setDraft((d) => ({ ...d, staff: d.staff.map((p) => p.id === person.id ? { ...p, name: e.target.value } : p) }))} placeholder={`Nama ${category}`} autoComplete="off" /><button type="button" className="icon-btn danger" onClick={() => setDraft((d) => ({ ...d, staff: d.staff.filter((p) => p.id !== person.id) }))} aria-label={`Padam ${person.name || category}`}>×</button></div>)}</div> : <p className="empty-category">Belum ada nama. Tekan “Tambah nama”.</p>}
               </section>;
             })}
@@ -291,12 +287,19 @@ export default function Home() {
           </Step>}
           {step === 3 && <Step title="Carry forward" subtitle="Masukkan secara manual selepas staf mengira baki pesakit di zon."><p className="formula-note carry-note">Carry Forward tidak dikira automatik. Hanya Zon Merah, Zon Kuning dan Observation Ward diperlukan.</p><div className="counter-grid carry-grid">{(["merah", "kuning", "observation"] as const).map((key) => <Counter key={key} label={key === "observation" ? "Observation Ward" : `Zon ${key[0].toUpperCase() + key.slice(1)}`} value={draft.carry[key]} onChange={(v) => updateCarry(key, v)} tone={key} />)}</div><Field label="Catatan carry forward" hint="Pilihan"><textarea value={draft.carryNotes} onChange={(e) => updateDraft({ carryNotes: e.target.value })} placeholder="Maklumat tambahan untuk syif seterusnya…" rows={4} /></Field></Step>}
           {step === 4 && <Step title="Laporan kes" subtitle="Rekodkan BID, DID dan sebarang kejadian atau catatan penting."><div className="counter-grid two"><Counter label="BID" value={draft.bid} onChange={(v) => updateDraft({ bid: v })} tone="bid" /><Counter label="DID" value={draft.did} onChange={(v) => updateDraft({ did: v })} tone="did" /></div><Field label="Catatan laporan" hint="Pilihan"><textarea value={draft.caseNotes} onChange={(e) => updateDraft({ caseNotes: e.target.value })} placeholder="Catat kejadian penting dalam syif ini…" rows={6} /></Field></Step>}
-          {step === 5 && <Step title="Pergerakan ambulans" subtitle="Tambah satu rekod bagi setiap perjalanan ambulans."><div className="ambulance-list">
+          {step === 5 && <Step title="Pergerakan Ambulans & Kenderaan" subtitle="Tambah satu rekod bagi setiap perjalanan ambulans atau kenderaan."><div className="ambulance-list">
+            <datalist id="vehicle-suggestions">{suggestionValues("vehicles").map((value) => <option key={value} value={value} />)}</datalist>
+            <datalist id="destination-suggestions">{suggestionValues("destinations").map((value) => <option key={value} value={value} />)}</datalist>
+            <datalist id="driver-suggestions">{suggestionValues("drivers").map((value) => <option key={value} value={value} />)}</datalist>
+            <datalist id="unit-suggestions">{suggestionValues("units").map((value) => <option key={value} value={value} />)}</datalist>
             {draft.ambulances.map((item, i) => <article className="ambulance-card" key={item.id}><div className="repeat-title"><h3>Perjalanan {i + 1}</h3><button type="button" className="text-danger" onClick={() => setDraft((d) => ({ ...d, ambulances: d.ambulances.filter((a) => a.id !== item.id) }))}>Padam</button></div><div className="field-grid compact">
-              {([["vehicleNo", "No. ambulans", "WQB 1234"], ["destination", "Destinasi", "Hospital Temerloh"], ["driver", "Pemandu", "Nama pemandu"], ["unit", "Unit / jabatan", "ETD"]] as const).map(([key, label, placeholder]) => <Field label={label} key={key}><input value={item[key]} placeholder={placeholder} onChange={(e) => setDraft((d) => ({ ...d, ambulances: d.ambulances.map((a) => a.id === item.id ? { ...a, [key]: e.target.value } : a) }))} /></Field>)}
+              <Field label="No. ambulans / kenderaan"><input list="vehicle-suggestions" value={item.vehicleNo} placeholder="WQB 1234" onChange={(e) => setDraft((d) => ({ ...d, ambulances: d.ambulances.map((a) => a.id === item.id ? { ...a, vehicleNo: e.target.value } : a) }))} /></Field>
+              <Field label="Destinasi"><input list="destination-suggestions" value={item.destination} placeholder="Hospital Temerloh" onChange={(e) => setDraft((d) => ({ ...d, ambulances: d.ambulances.map((a) => a.id === item.id ? { ...a, destination: e.target.value } : a) }))} /></Field>
+              <Field label="Unit / jabatan"><input list="unit-suggestions" value={item.unit} placeholder="ETD" onChange={(e) => setDraft((d) => ({ ...d, ambulances: d.ambulances.map((a) => a.id === item.id ? { ...a, unit: e.target.value } : a) }))} /></Field>
+              <div className="driver-list"><span>Pemandu</span>{item.drivers.map((driver, driverIndex) => <div className="driver-row" key={`${item.id}-${driverIndex}`}><input list="driver-suggestions" aria-label={`Pemandu ${driverIndex + 1}`} value={driver} placeholder={`Pemandu ${driverIndex + 1}`} onChange={(e) => setDraft((d) => ({ ...d, ambulances: d.ambulances.map((a) => a.id === item.id ? { ...a, drivers: a.drivers.map((value, index) => index === driverIndex ? e.target.value : value) } : a) }))} />{item.drivers.length > 1 ? <button type="button" className="icon-btn danger" aria-label={`Buang pemandu ${driverIndex + 1}`} onClick={() => setDraft((d) => ({ ...d, ambulances: d.ambulances.map((a) => a.id === item.id ? { ...a, drivers: a.drivers.filter((_, index) => index !== driverIndex) } : a) }))}>×</button> : null}</div>)}<button type="button" className="link-btn" onClick={() => setDraft((d) => ({ ...d, ambulances: d.ambulances.map((a) => a.id === item.id ? { ...a, drivers: [...a.drivers, ""] } : a) }))}>+ Tambah pemandu</button></div>
               <Field label="Masa keluar"><input type="time" value={item.timeOut} onChange={(e) => setDraft((d) => ({ ...d, ambulances: d.ambulances.map((a) => a.id === item.id ? { ...a, timeOut: e.target.value } : a) }))} /></Field><Field label="Masa balik"><input type="time" value={item.timeIn} onChange={(e) => setDraft((d) => ({ ...d, ambulances: d.ambulances.map((a) => a.id === item.id ? { ...a, timeIn: e.target.value } : a) }))} /></Field>
             </div></article>)}
-          </div><button type="button" className="add-btn" onClick={() => setDraft((d) => ({ ...d, ambulances: [...d.ambulances, blankAmbulance()] }))}>+ Tambah perjalanan ambulans</button></Step>}
+          </div><button type="button" className="add-btn" onClick={() => setDraft((d) => ({ ...d, ambulances: [...d.ambulances, blankAmbulance()] }))}>+ Tambah perjalanan</button></Step>}
           {step === 6 && <Step title="Panggilan kecemasan" subtitle="Catat bilangan panggilan yang diterima mengikut sumber."><div className="counter-grid">{(["mecc", "operator", "awam", "palsu"] as const).map((key) => <Counter key={key} label={key === "mecc" ? "MECC / Call Centre" : key[0].toUpperCase() + key.slice(1)} value={draft.calls[key]} onChange={(v) => updateCall(key, v)} tone={key} />)}</div><div className="total-band"><span>Jumlah panggilan</span><strong>{totalCalls(draft)}</strong></div><Field label="Catatan panggilan" hint="Pilihan"><textarea rows={4} value={draft.callNotes} onChange={(e) => updateDraft({ callNotes: e.target.value })} placeholder="Maklumat tambahan…" /></Field></Step>}
           {step === 7 && <Step title={previewOnly ? "Pratonton cetakan" : "Semakan akhir"} subtitle={previewOnly ? "Semak susunan laporan A4 sebelum membuka pilihan cetak telefon." : "Semak semua maklumat sebelum menyimpan laporan ke Firebase."}><ReportPreview report={draft} /><div className="review-actions no-print">{previewOnly ? <><button type="button" className="secondary" onClick={() => leaveForm("records")}>← Kembali ke Rekod</button><button type="button" className="primary" onClick={() => window.print()}>⎙ Cetak Laporan</button></> : <><button type="button" className="secondary" onClick={() => window.print()}>⎙ Cetak A4</button><button type="submit" className="primary" disabled={busy}>{busy ? "Menyimpan…" : "Simpan ke Firebase"}</button></>}</div></Step>}
         </section>
@@ -304,12 +307,13 @@ export default function Home() {
       </form>}
 
       {ready && view === "records" && <div className="page"><section className="hero"><div><p className="eyebrow">🔥 REKOD FIREBASE</p><h2>Rekod laporan</h2><p className="muted">Cari, lihat dan kemas kini laporan yang dikongsi oleh semua staf.</p></div></section>
-        <section className="filter-card"><Field label="Tarikh"><input type="date" value={filterDate} onChange={(e) => setFilterDate(e.target.value)} /></Field><Field label="Syif"><select value={filterShift} onChange={(e) => setFilterShift(e.target.value as Shift | "Semua")}><option>Semua</option>{shifts.map((s) => <option key={s}>{s}</option>)}</select></Field><div className="filter-actions"><button className="primary" disabled={busy} onClick={() => void searchRecords()}>{busy ? "Mencari…" : "Cari Rekod"}</button><button className="link-btn" onClick={() => { setFilterDate(""); setFilterShift("Semua"); setRecordResults(reports); }}>Kosongkan</button></div></section>
+        <section className="filter-card"><Field label="Tarikh mula"><input type="date" value={filterDate} onChange={(e) => setFilterDate(e.target.value)} /></Field><Field label="Tarikh akhir" hint="Pilihan"><input type="date" min={filterDate} value={filterEndDate} onChange={(e) => setFilterEndDate(e.target.value)} /></Field><Field label="Syif"><select value={filterShift} onChange={(e) => setFilterShift(e.target.value as Shift | "Semua")}><option>Semua</option>{shifts.map((s) => <option key={s}>{s}</option>)}</select></Field><div className="filter-actions"><button className="primary" disabled={busy} onClick={() => void searchRecords()}>{busy ? "Mencari…" : filterDate ? "Cari Rekod" : "Papar 10 Rekod"}</button><button className="link-btn" onClick={() => { setFilterDate(""); setFilterEndDate(""); setFilterShift("Semua"); setRecordResults([]); setCurrentPageToken(""); setNextPageToken(""); setPageHistory([]); }}>Kosongkan</button></div></section>
         <section className="record-list">{filtered.length ? filtered.map((report) => <article className="record-card" key={report.id}><div className="date-tile"><strong>{new Date(`${report.date}T12:00:00`).getDate()}</strong><span>{new Date(`${report.date}T12:00:00`).toLocaleDateString("ms-MY", { month: "short" })}</span></div><div className="record-main"><span className="status complete">Syif {report.shift}</span><h3>{totalCases(report)} kes</h3><p>{shiftTimes[report.shift]} · Diisi oleh {report.filledBy || "—"}</p></div><div className="record-metrics"><span><b>{derived(report).merah}</b> Merah</span><span><b>{derived(report).kuning}</b> Kuning</span><span><b>{derived(report).hijau}</b> Hijau</span></div><div className="record-actions"><button className="secondary" onClick={() => startReport(report.shift, report.date)}>Edit</button><button className="secondary" onClick={() => printReport(report)}>Pratonton</button><button className="icon-btn danger" onClick={() => remove(report)} aria-label={`Padam laporan ${report.shift} ${report.date}`}>×</button></div></article>) : <Empty title="Tiada rekod ditemui" text="Cuba tarikh atau syif lain, atau cipta laporan baharu." />}</section>
+        {!filterDate && filtered.length ? <div className="record-pagination"><button className="secondary" disabled={busy || pageHistory.length === 0} onClick={() => { const history = pageHistory.slice(0, -1); void loadRecordPage(pageHistory.at(-1) || "", history); }}>← Sebelum</button><span>Halaman {pageHistory.length + 1}</span><button className="secondary" disabled={busy || !nextPageToken} onClick={() => void loadRecordPage(nextPageToken, [...pageHistory, currentPageToken])}>Seterusnya →</button></div> : null}
       </div>}
 
-      {ready && view === "stats" && <div className="page"><section className="hero stats-hero"><div><p className="eyebrow">🔥 ANALISIS FIREBASE</p><h2>Statistik ETD</h2><p className="muted">Pilih hari, minggu, bulan atau tahun untuk melihat jumlah dan graf tempoh tersebut sahaja.</p></div><PeriodPicker period={statsPeriod} anchor={statsAnchor} onPeriod={setStatsPeriod} onAnchor={setStatsAnchor} /></section>
-        <section className="stats-feature"><div><p>{statsPeriod === "day" ? "JUMLAH HARI DIPILIH" : statsPeriod === "week" ? "JUMLAH MINGGU DIPILIH" : statsPeriod === "month" ? "JUMLAH BULAN DIPILIH" : "JUMLAH TAHUN DIPILIH"}</p><strong>{busy ? "…" : periodTotals.cases}</strong><span>{remoteStats ? `${formatDate(remoteStats.start, true)} – ${formatDate(remoteStats.end, true)}` : "Mengambil data Firebase"}</span></div><div className="distribution">{[["Merah", periodTotals.merah, "#dc3f45"], ["Kuning", periodTotals.kuning, "#e0a300"], ["Hijau", periodTotals.hijau, "#14915f"]].map(([name, value, color]) => { const pct = periodTotals.cases ? Math.round((Number(value) / periodTotals.cases) * 100) : 0; return <div className="bar-row" key={name}><span>{name}</span><div><i style={{ width: `${pct}%`, background: color }} /></div><b>{value} <small>{pct}%</small></b></div>; })}</div></section>
+      {ready && view === "stats" && <div className="page"><section className="hero stats-hero"><div><p className="eyebrow">🔥 ANALISIS FIREBASE</p><h2>Statistik ETD</h2><p className="muted">Pilih minggu, bulan atau tahun. Data hanya dibaca apabila butang Papar sensus ditekan.</p></div><div><PeriodPicker period={statsPeriod} anchor={statsAnchor} onPeriod={(value) => { setStatsPeriod(value); setRemoteStats(null); }} onAnchor={(value) => { setStatsAnchor(value); setRemoteStats(null); }} /><button className="primary stats-load" disabled={busy} onClick={() => void loadStats()}>{busy ? "Mengambil data…" : "Papar sensus"}</button></div></section>
+        <section className="stats-feature"><div><p>{statsPeriod === "week" ? "JUMLAH MINGGU DIPILIH" : statsPeriod === "month" ? "JUMLAH BULAN DIPILIH" : "JUMLAH TAHUN DIPILIH"}</p><strong>{busy ? "…" : periodTotals.cases}</strong><span>{remoteStats ? `${formatDate(remoteStats.start, true)} – ${formatDate(remoteStats.end, true)}` : "Pilih tempoh dan tekan Papar sensus"}</span></div><div className="distribution">{[["Merah", periodTotals.merah, "#dc3f45"], ["Kuning", periodTotals.kuning, "#e0a300"], ["Hijau", periodTotals.hijau, "#14915f"]].map(([name, value, color]) => { const pct = periodTotals.cases ? Math.round((Number(value) / periodTotals.cases) * 100) : 0; return <div className="bar-row" key={name}><span>{name}</span><div><i style={{ width: `${pct}%`, background: color }} /></div><b>{value} <small>{pct}%</small></b></div>; })}</div></section>
         <div className="metric-grid stats-grid"><Metric label="Masuk wad" value={periodTotals.ward} accent="blue" icon="▣" /><Metric label="Ambulans" value={periodTotals.ambulance} accent="orange" icon="➜" /><Metric label="Panggilan" value={periodTotals.calls} accent="emerald" icon="☎" /><Metric label="Asthma Bay" value={periodTotals.asthma} accent="purple" icon="◌" /><Metric label="OSCC" value={periodTotals.oscc} accent="pink" icon="◇" /><Metric label="BID / DID" value={`${periodTotals.bid} / ${periodTotals.did}`} accent="slate" icon="+" /></div>
         <section className="level-card"><div className="section-heading"><div><p className="eyebrow">PECAHAN LEVEL</p><h2>L1 hingga L5</h2></div></div><div className="level-grid">{(["l1", "l2", "l3", "l4", "l5"] as const).map((key) => <div key={key}><span>{key.toUpperCase()}</span><strong>{periodTotals[key]}</strong></div>)}</div></section>
         <section className="level-card chart-card"><div className="section-heading"><div><p className="eyebrow">GRAF TEMPOH DIPILIH</p><h2>Trend jumlah pesakit</h2></div></div><TrendChart groups={remoteStats?.groups || []} /></section>
@@ -331,11 +335,11 @@ function Empty({ title, text }: { title: string; text: string }) { return <div c
 
 function ReportPreview({ report }: { report: Report }) {
   return <article className="report-preview"><header><img className="print-logo" src="/etd-logo.jpg" alt="Logo ETD Kuala Lipis" /><div><small>KEMENTERIAN KESIHATAN MALAYSIA</small><h2>LAPORAN HARIAN ETD</h2><p>E.T.D Hospital Kuala Lipis</p></div><div className="report-id"><span>Tarikh</span><strong>{formatDate(report.date)}</strong><span>Syif</span><strong>{report.shift}</strong></div></header>
-    <section className="preview-summary"><div><span>Diisi oleh</span><strong>{report.filledBy || "Belum diisi"}</strong></div><div><span>Jumlah kes</span><strong>{totalCases(report)}</strong></div><div><span>Kakitangan</span><strong>{report.staff.length}</strong></div><div><span>Ambulans</span><strong>{report.ambulances.length}</strong></div></section>
+    <section className="preview-summary"><div><span>Diisi oleh</span><strong>{report.filledBy || "Belum diisi"}</strong></div><div><span>Jumlah kes</span><strong>{totalCases(report)}</strong></div><div><span>Kakitangan</span><strong>{report.staff.length}</strong></div><div><span>Ambulans / kenderaan</span><strong>{report.ambulances.length}</strong></div></section>
     <section><h3>Statistik kes</h3><div className="print-stats">{(["l1", "l2", "l3", "l4", "l5", "asthmaBay"] as const).map((key) => <div key={key}><span>{labels[key]}</span><b>{report.stats[key]}</b></div>)}<div><span>Zon Merah</span><b>{derived(report).merah}</b></div><div><span>Zon Kuning</span><b>{derived(report).kuning}</b></div><div><span>Zon Hijau</span><b>{derived(report).hijau}</b></div><div><span>Kes Baru</span><b>{derived(report).kesBaru}</b></div><div><span>Kes Ulangan</span><b>{derived(report).kesUlangan}</b></div><div><span>OSCC</span><b>{report.stats.oscc}</b></div><div><span>Masuk Wad</span><b>{report.stats.masukWad}</b></div></div></section>
     <section className="preview-columns"><div><h3>Kakitangan bertugas</h3>{report.staff.length ? <ul>{report.staff.map((s) => <li key={s.id}><span>{s.name || "—"}</span><small>{s.category}</small></li>)}</ul> : <p>Tiada rekod</p>}</div><div><h3>Carry forward</h3><ul><li><span>Zon Merah</span><b>{report.carry.merah}</b></li><li><span>Zon Kuning</span><b>{report.carry.kuning}</b></li><li><span>Observation Ward</span><b>{report.carry.observation}</b></li></ul></div></section>
     <section className="preview-columns"><div><h3>Laporan kes</h3><p><strong>BID: {report.bid} &nbsp; DID: {report.did}</strong></p><p>{report.caseNotes || "Tiada catatan."}</p></div><div><h3>Panggilan kecemasan</h3><ul>{Object.entries(report.calls).map(([key, val]) => <li key={key}><span>{key.toUpperCase()}</span><b>{val}</b></li>)}</ul></div></section>
-    <section><h3>Pergerakan ambulans</h3>{report.ambulances.length ? <div className="print-table"><div><b>No.</b><b>Destinasi / unit</b><b>Pemandu</b><b>Masa</b></div>{report.ambulances.map((a) => <div key={a.id}><span>{a.vehicleNo || "—"}</span><span>{a.destination || "—"} · {a.unit || "—"}</span><span>{a.driver || "—"}</span><span>{a.timeOut || "—"} – {a.timeIn || "—"}</span></div>)}</div> : <p>Tiada pergerakan ambulans.</p>}</section>
+    <section><h3>Pergerakan Ambulans & Kenderaan</h3>{report.ambulances.length ? <div className="print-table"><div><b>No.</b><b>Destinasi / unit</b><b>Pemandu</b><b>Masa</b></div>{report.ambulances.map((a) => <div key={a.id}><span>{a.vehicleNo || "—"}</span><span>{a.destination || "—"} · {a.unit || "—"}</span><span>{a.drivers.filter(Boolean).join(", ") || a.driver || "—"}</span><span>{a.timeOut || "—"} – {a.timeIn || "—"}</span></div>)}</div> : <p>Tiada pergerakan ambulans atau kenderaan.</p>}</section>
     <footer>Rekod rasmi Laporan Harian ETD · Dikemas kini {new Date(report.updatedAt).toLocaleString("ms-MY")}</footer>
   </article>;
 }
@@ -345,12 +349,10 @@ function PeriodPicker({ period, anchor, onPeriod, onAnchor }: { period: StatsPer
   const years = Array.from({ length: 9 }, (_, index) => new Date().getFullYear() - 4 + index);
   return <div className="period-picker">
     <div className="segmented period-switch">
-      <button className={period === "day" ? "selected" : ""} onClick={() => onPeriod("day")}>Hari</button>
       <button className={period === "week" ? "selected" : ""} onClick={() => onPeriod("week")}>Minggu</button>
       <button className={period === "month" ? "selected" : ""} onClick={() => onPeriod("month")}>Bulan</button>
       <button className={period === "year" ? "selected" : ""} onClick={() => onPeriod("year")}>Tahun</button>
     </div>
-    {period === "day" ? <input aria-label="Pilih hari" type="date" value={anchor} onChange={(event) => onAnchor(event.target.value)} /> : null}
     {period === "week" ? <input aria-label="Pilih minggu" type="date" value={anchor} onChange={(event) => onAnchor(event.target.value)} /> : null}
     {period === "month" ? <input aria-label="Pilih bulan" type="month" value={anchor.slice(0, 7)} onChange={(event) => onAnchor(`${event.target.value}-01`)} /> : null}
     {period === "year" ? <select aria-label="Pilih tahun" value={currentYear} onChange={(event) => onAnchor(`${event.target.value}-01-01`)}>{years.map((year) => <option key={year}>{year}</option>)}</select> : null}
