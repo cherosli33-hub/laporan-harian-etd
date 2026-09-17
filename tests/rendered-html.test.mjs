@@ -12,6 +12,8 @@ test("startup reads only the current operational date", async () => {
   assert.doesNotMatch(repository, /allRemoteReports|getAll\(/);
   assert.match(repository, /fieldPath: "date"/);
   assert.match(repository, /op: "EQUAL"/);
+  assert.match(page, /malaysiaMinutes\(\) < 7 \* 60/);
+  assert.doesNotMatch(page, /7 \* 60 \+ 30|7:30 pagi/);
 });
 
 test("records use range queries and server pagination", async () => {
