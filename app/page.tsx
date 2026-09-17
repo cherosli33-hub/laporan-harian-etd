@@ -11,7 +11,7 @@ const shifts: Shift[] = ["Pagi", "Petang", "Malam"];
 const steps = ["Maklumat asas", "Kakitangan", "Statistik kes", "Carry forward", "Laporan kes", "Ambulans & Kenderaan", "Panggilan", "Semakan"];
 const labels: Record<StatKey, string> = { merah: "Merah", kuning: "Kuning", hijau: "Hijau", l1: "L1", l2: "L2", l3: "L3", l4: "L4", l5: "L5", asthmaBay: "Asthma Bay", oscc: "OSCC", kesBaru: "Kes Baru", kesUlangan: "Kes Ulangan", masukWad: "Masuk Wad" };
 const staffCategories = ["Pegawai Perubatan", "PPP", "Nurse/Jururawat", "PPK", "Pemandu Ambulans"];
-const shiftTimes: Record<Shift, string> = { Pagi: "7:00 pagi – 2:00 petang", Petang: "2:00 petang – 9:00 malam", Malam: "9:00 malam – 7:30 pagi" };
+const shiftTimes: Record<Shift, string> = { Pagi: "7:00 pagi – 2:00 petang", Petang: "2:00 petang – 9:00 malam", Malam: "9:00 malam – 7:00 pagi" };
 const todayISO = () => new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kuala_Lumpur" });
 const malaysiaMinutes = () => {
   const parts = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Kuala_Lumpur", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(new Date());
@@ -22,8 +22,8 @@ const previousDateISO = (date: string) => {
   value.setDate(value.getDate() - 1);
   return value.toLocaleDateString("en-CA", { timeZone: "Asia/Kuala_Lumpur" });
 };
-const operationalDateISO = () => malaysiaMinutes() < 7 * 60 + 30 ? previousDateISO(todayISO()) : todayISO();
-const reportingDateForShift = (shift: Shift) => shift === "Malam" && malaysiaMinutes() < 7 * 60 + 30 ? previousDateISO(todayISO()) : todayISO();
+const operationalDateISO = () => malaysiaMinutes() < 7 * 60 ? previousDateISO(todayISO()) : todayISO();
+const reportingDateForShift = (shift: Shift) => shift === "Malam" && malaysiaMinutes() < 7 * 60 ? previousDateISO(todayISO()) : todayISO();
 const currentShift = (): Shift => {
   const minutes = malaysiaMinutes();
   if (minutes >= 7 * 60 && minutes < 14 * 60) return "Pagi";
@@ -215,7 +215,7 @@ export default function Home() {
       {!ready ? <div className="loading">Menyiapkan ruang laporan…</div> : null}
 
       {ready && view === "dashboard" && <div className="page page-dashboard">
-        <section className="hero"><div><p className="eyebrow">HARI OPERASI ETD</p><h2>{formatDate(today)}</h2><p className="muted">Syif Malam kekal pada tarikh mula syif sehingga 7:30 pagi.</p></div><button className="primary desktop-action" onClick={() => startReport(currentShift())}>+ Isi laporan</button></section>
+        <section className="hero"><div><p className="eyebrow">HARI OPERASI ETD</p><h2>{formatDate(today)}</h2><p className="muted">Syif Malam kekal pada tarikh mula syif sehingga 7:00 pagi.</p></div><button className="primary desktop-action" onClick={() => startReport(currentShift())}>+ Isi laporan</button></section>
         <section className="shift-grid">
           {shifts.map((shift, index) => {
             const report = todaysReports.find((r) => r.shift === shift);
