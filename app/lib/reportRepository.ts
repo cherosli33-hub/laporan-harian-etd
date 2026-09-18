@@ -1,14 +1,16 @@
 import { normalizeReport, type Report } from "./types";
+import { nextDateISO, operationalDateForReport } from "./operationalDate";
 
 const FIREBASE_API_KEY = "AIzaSyCQQ85ceJep54XbkDFun2Zb1dpECcsCAIw";
 const PROJECT_ID = "amo-dashboard-v2";
 const COLLECTION = "daily_reports";
 const CACHE_KEY = "etd-laporan-harian:today-cache:v3";
 const AUTH_KEY = "etd-laporan-harian:firebase-auth:v2";
+const STATS_CACHE_KEY = "etd-laporan-harian:stats-cache:v1";
 
 export type StatsPeriod = "week" | "month" | "year";
 export type StatsTotals = { cases: number; merah: number; kuning: number; hijau: number; l1: number; l2: number; l3: number; l4: number; l5: number; asthma: number; oscc: number; kesBaru: number; kesUlangan: number; ward: number; ambulance: number; calls: number; bid: number; did: number };
-export type RemoteStats = { period: StatsPeriod; start: string; end: string; totals: StatsTotals; groups: Array<{ key: string } & StatsTotals> };
+export type RemoteStats = { period: StatsPeriod; start: string; end: string; totals: StatsTotals; groups: Array<{ key: string } & StatsTotals>; reports: Report[]; cacheKey: string };
 export type RecordPage = { reports: Report[]; nextPageToken: string };
 
 type AuthSession = { idToken: string; refreshToken: string; expiresAt: number };
@@ -73,6 +75,41 @@ async function queryRange(start: string, end = start): Promise<Report[]> {
   return sortReports(rows.map((row) => docToReport(row.document)).filter((report): report is Report => Boolean(report)));
 }
 
+const statisticsMemoryCache = new Map<string, RemoteStats>();
+const statisticsRequests = new Map<string, Promise<RemoteStats>>();
+
+function statisticsCacheKey(period: StatsPeriod, start: string, end: string) {
+  return `${period === "week" ? "weekly" : period === "month" ? "monthly" : "yearly"}_${period === "week" ? `${start}_${end}` : period === "month" ? start.slice(0, 7) : start.slice(0, 4)}`;
+}
+
+function readStatisticsCache(key: string): RemoteStats | null {
+  const memory = statisticsMemoryCache.get(key);
+  if (memory) return memory;
+  if (typeof window === "undefined") return null;
+  try {
+    const parsed = JSON.parse(window.sessionStorage.getItem(`${STATS_CACHE_KEY}:${key}`) || "null") as RemoteStats | null;
+    if (!parsed?.totals || !Array.isArray(parsed.groups) || !Array.isArray(parsed.reports)) return null;
+    const normalized = { ...parsed, reports: parsed.reports.map(normalizeReport) };
+    statisticsMemoryCache.set(key, normalized);
+    return normalized;
+  } catch { return null; }
+}
+
+function writeStatisticsCache(value: RemoteStats) {
+  statisticsMemoryCache.set(value.cacheKey, value);
+  if (typeof window !== "undefined") {
+    try { window.sessionStorage.setItem(`${STATS_CACHE_KEY}:${value.cacheKey}`, JSON.stringify(value)); } catch { /* memory cache remains available */ }
+  }
+}
+
+function clearStatisticsCache() {
+  statisticsMemoryCache.clear();
+  statisticsRequests.clear();
+  if (typeof window !== "undefined") {
+    Object.keys(window.sessionStorage).filter((key) => key.startsWith(`${STATS_CACHE_KEY}:`)).forEach((key) => window.sessionStorage.removeItem(key));
+  }
+}
+
 function emptyTotals(): StatsTotals { return { cases: 0, merah: 0, kuning: 0, hijau: 0, l1: 0, l2: 0, l3: 0, l4: 0, l5: 0, asthma: 0, oscc: 0, kesBaru: 0, kesUlangan: 0, ward: 0, ambulance: 0, calls: 0, bid: 0, did: 0 }; }
 function addTotals(total: StatsTotals, report: Report) {
   const s = report.stats;
@@ -108,15 +145,46 @@ export const reportRepository = {
     try { await firebaseFetch(url); created = false; } catch { created = true; }
     const now = new Date().toISOString(); const saved: Report = { ...normalized, id, createdAt: created ? (normalized.createdAt || now) : normalized.createdAt, updatedAt: now };
     await firebaseFetch(url, { method: "PATCH", body: JSON.stringify({ fields: { date: { stringValue: saved.date }, shift: { stringValue: saved.shift }, reportJson: { stringValue: JSON.stringify(saved) }, deleted: { booleanValue: false }, updatedAt: { stringValue: saved.updatedAt } } }) });
+    clearStatisticsCache();
     return { created, report: saved };
   },
   async remove(id: string) {
     const url = `${baseUrl()}/${encodeURIComponent(id)}?updateMask.fieldPaths=deleted&updateMask.fieldPaths=updatedAt`;
     await firebaseFetch(url, { method: "PATCH", body: JSON.stringify({ fields: { deleted: { booleanValue: true }, updatedAt: { stringValue: new Date().toISOString() } } }) });
+    clearStatisticsCache();
   },
-  async getStats(period: StatsPeriod, anchor: string): Promise<RemoteStats> {
-    const range = periodRange(period, anchor); const reports = await queryRange(range.start, range.end); const totals = emptyTotals(); reports.forEach((report) => addTotals(totals, report)); const grouped = new Map<string, StatsTotals>();
-    reports.forEach((report) => { const key = period === "year" ? report.date.slice(0, 7) : report.date; if (!grouped.has(key)) grouped.set(key, emptyTotals()); addTotals(grouped.get(key)!, report); });
-    return { period, ...range, totals, groups: [...grouped.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([key, value]) => ({ key, ...value })) };
+  async getStats(period: StatsPeriod, anchor: string, options: { refresh?: boolean } = {}): Promise<RemoteStats> {
+    const range = periodRange(period, anchor);
+    const cacheKey = statisticsCacheKey(period, range.start, range.end);
+    if (!options.refresh) {
+      const cached = readStatisticsCache(cacheKey);
+      if (cached) return cached;
+      const pending = statisticsRequests.get(cacheKey);
+      if (pending) return pending;
+    }
+    const request = (async () => {
+      // One query only. The extra calendar day lets legacy pre-07:00 Malam
+      // records be normalized and filtered to the correct operational date.
+      const queried = await queryRange(range.start, nextDateISO(range.end));
+      const reports = queried.filter((report) => {
+        const date = operationalDateForReport(report);
+        return date >= range.start && date <= range.end;
+      });
+      const totals = emptyTotals();
+      const grouped = new Map<string, StatsTotals>();
+      reports.forEach((report) => {
+        addTotals(totals, report);
+        const operationalDate = operationalDateForReport(report);
+        const key = period === "year" ? operationalDate.slice(0, 7) : operationalDate;
+        if (!grouped.has(key)) grouped.set(key, emptyTotals());
+        addTotals(grouped.get(key)!, report);
+      });
+      const value: RemoteStats = { period, ...range, totals, reports, cacheKey, groups: [...grouped.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => ({ key, ...item })) };
+      writeStatisticsCache(value);
+      return value;
+    })();
+    statisticsRequests.set(cacheKey, request);
+    try { return await request; } finally { statisticsRequests.delete(cacheKey); }
   },
+  clearStatisticsCache,
 };

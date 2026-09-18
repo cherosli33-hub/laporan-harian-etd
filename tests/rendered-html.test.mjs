@@ -27,10 +27,10 @@ test("records use range queries and server pagination", async () => {
   assert.match(repository, /orderBy/);
 });
 
-test("statistics are weekly, monthly or yearly and load on demand", async () => {
+test("statistics are weekly, monthly or yearly and load once per selected range", async () => {
   const [page, repository] = await Promise.all([source("app/page.tsx"), source("app/lib/reportRepository.ts")]);
   assert.match(repository, /StatsPeriod = "week" \| "month" \| "year"/);
-  assert.match(page, /Papar sensus/);
+  assert.match(page, /loadStats\(\)/);
   assert.doesNotMatch(page, /if \(view !== "stats"\)/);
   for (const metric of ["l1", "l2", "l3", "l4", "l5", "merah", "kuning", "hijau", "asthma"]) assert.match(repository, new RegExp(metric));
 });

@@ -1,9 +1,9 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { Report, Shift, StatKey, emptyReport, normalizeReport } from "./lib/types";
 import { localReportRepository } from "./lib/localReportRepository";
-import { RemoteStats, StatsPeriod, reportRepository } from "./lib/reportRepository";
+import { RemoteStats, StatsPeriod, StatsTotals, periodRange, reportRepository } from "./lib/reportRepository";
 import { suggestionStore, type SuggestionKind } from "./lib/suggestionStore";
 
 type View = "dashboard" | "form" | "records" | "stats";
@@ -196,12 +196,16 @@ export default function Home() {
     catch (error) { setSyncState("offline"); notify(error instanceof Error ? error.message : "Halaman rekod gagal dimuatkan."); }
     finally { setBusy(false); }
   };
-  const loadStats = async () => {
+  const loadStats = useCallback(async (refresh = false) => {
     setBusy(true);
-    try { setRemoteStats(await reportRepository.getStats(statsPeriod, statsAnchor)); setSyncState("online"); }
+    try { setRemoteStats(await reportRepository.getStats(statsPeriod, statsAnchor, { refresh })); setSyncState("online"); }
     catch (error) { setSyncState("offline"); notify(error instanceof Error ? error.message : "Statistik gagal dimuatkan."); }
     finally { setBusy(false); }
-  };
+  }, [statsAnchor, statsPeriod]);
+  useEffect(() => {
+    if (!ready || view !== "stats") return;
+    void loadStats();
+  }, [loadStats, ready, view]);
   const printReport = (report: Report) => { setPreviewOnly(true); setDraft(structuredClone(report)); setStep(7); setView("form"); window.scrollTo({ top: 0, behavior: "smooth" }); };
   const dayTotals = summarize(todaysReports);
   const periodTotals = remoteStats?.totals || summarize([]);
@@ -312,11 +316,13 @@ export default function Home() {
         {!filterDate && filtered.length ? <div className="record-pagination"><button className="secondary" disabled={busy || pageHistory.length === 0} onClick={() => { const history = pageHistory.slice(0, -1); void loadRecordPage(pageHistory.at(-1) || "", history); }}>← Sebelum</button><span>Halaman {pageHistory.length + 1}</span><button className="secondary" disabled={busy || !nextPageToken} onClick={() => void loadRecordPage(nextPageToken, [...pageHistory, currentPageToken])}>Seterusnya →</button></div> : null}
       </div>}
 
-      {ready && view === "stats" && <div className="page"><section className="hero stats-hero"><div><p className="eyebrow">🔥 ANALISIS FIREBASE</p><h2>Statistik ETD</h2><p className="muted">Pilih minggu, bulan atau tahun. Data hanya dibaca apabila butang Papar sensus ditekan.</p></div><div><PeriodPicker period={statsPeriod} anchor={statsAnchor} onPeriod={(value) => { setStatsPeriod(value); setRemoteStats(null); }} onAnchor={(value) => { setStatsAnchor(value); setRemoteStats(null); }} /><button className="primary stats-load" disabled={busy} onClick={() => void loadStats()}>{busy ? "Mengambil data…" : "Papar sensus"}</button></div></section>
-        <section className="stats-feature"><div><p>{statsPeriod === "week" ? "JUMLAH MINGGU DIPILIH" : statsPeriod === "month" ? "JUMLAH BULAN DIPILIH" : "JUMLAH TAHUN DIPILIH"}</p><strong>{busy ? "…" : periodTotals.cases}</strong><span>{remoteStats ? `${formatDate(remoteStats.start, true)} – ${formatDate(remoteStats.end, true)}` : "Pilih tempoh dan tekan Papar sensus"}</span></div><div className="distribution">{[["Merah", periodTotals.merah, "#dc3f45"], ["Kuning", periodTotals.kuning, "#e0a300"], ["Hijau", periodTotals.hijau, "#14915f"]].map(([name, value, color]) => { const pct = periodTotals.cases ? Math.round((Number(value) / periodTotals.cases) * 100) : 0; return <div className="bar-row" key={name}><span>{name}</span><div><i style={{ width: `${pct}%`, background: color }} /></div><b>{value} <small>{pct}%</small></b></div>; })}</div></section>
-        <div className="metric-grid stats-grid"><Metric label="Masuk wad" value={periodTotals.ward} accent="blue" icon="▣" /><Metric label="Ambulans" value={periodTotals.ambulance} accent="orange" icon="➜" /><Metric label="Panggilan" value={periodTotals.calls} accent="emerald" icon="☎" /><Metric label="Asthma Bay" value={periodTotals.asthma} accent="purple" icon="◌" /><Metric label="OSCC" value={periodTotals.oscc} accent="pink" icon="◇" /><Metric label="BID / DID" value={`${periodTotals.bid} / ${periodTotals.did}`} accent="slate" icon="+" /></div>
-        <section className="level-card"><div className="section-heading"><div><p className="eyebrow">PECAHAN LEVEL</p><h2>L1 hingga L5</h2></div></div><div className="level-grid">{(["l1", "l2", "l3", "l4", "l5"] as const).map((key) => <div key={key}><span>{key.toUpperCase()}</span><strong>{periodTotals[key]}</strong></div>)}</div></section>
-        <section className="level-card chart-card"><div className="section-heading"><div><p className="eyebrow">GRAF TEMPOH DIPILIH</p><h2>Trend jumlah pesakit</h2></div></div><TrendChart groups={remoteStats?.groups || []} /></section>
+      {ready && view === "stats" && <div className="page stats-page"><section className="hero stats-hero"><div><p className="eyebrow">ANALISIS ETD</p><h2>Statistik ETD</h2><p className="muted">Satu bacaan bagi setiap tempoh; kad, graf dan jadual berkongsi dataset yang sama.</p></div><button className="secondary stats-refresh" disabled={busy} onClick={() => void loadStats(true)}>{busy ? "Memuat…" : "↻ Refresh"}</button></section>
+        <PeriodNavigator period={statsPeriod} anchor={statsAnchor} today={today} onPeriod={(value) => { setStatsPeriod(value); setRemoteStats(null); }} onAnchor={(value) => { setStatsAnchor(value); setRemoteStats(null); }} />
+        <div className="stats-summary-grid"><Metric label="Jumlah Pesakit" value={busy && !remoteStats ? "…" : periodTotals.cases} accent="emerald" icon="✚" /><Metric label="Purata / Hari" value={averagePerDay(periodTotals.cases, remoteStats?.start, remoteStats?.end)} accent="blue" icon="÷" /><Metric label="Asthma" value={periodTotals.asthma} accent="purple" icon="◌" /></div>
+        <section className="level-card"><div className="section-heading"><div><p className="eyebrow">SENSUS L1 – L5</p><h2>Tahap kes</h2></div></div><LevelBarChart totals={periodTotals} /></section>
+        <section className="stats-section"><div className="section-heading"><div><p className="eyebrow">MENGIKUT ZON</p><h2>Pecahan pesakit</h2></div></div><div className="zone-stat-grid">{[["Red Zone", periodTotals.merah, "red"], ["Yellow Zone", periodTotals.kuning, "yellow"], ["Green Zone", periodTotals.hijau, "green"]].map(([name, value, tone]) => <article className={`zone-stat zone-stat-${tone}`} key={name}><span>{name}</span><strong>{value}</strong><small>{percentage(Number(value), periodTotals.cases)}% daripada keseluruhan</small></article>)}</div></section>
+        <section className="level-card chart-card"><div className="section-heading"><div><p className="eyebrow">TREND PESAKIT</p><h2>{statsPeriod === "week" ? "Mengikut hari" : statsPeriod === "month" ? "Mengikut tarikh" : "Mengikut bulan"}</h2></div></div><TrendChart groups={completeTrendGroups(remoteStats)} /></section>
+        <section className="level-card detail-card"><div className="section-heading"><div><p className="eyebrow">PECAHAN TERPERINCI</p><h2>Ringkasan kategori</h2></div></div><DetailTable totals={periodTotals} /></section>
       </div>}
 
       <nav className="bottom-nav no-print" aria-label="Navigasi utama"><NavButton active={view === "dashboard"} icon="⌂" label="Utama" onClick={() => leaveForm("dashboard")} /><NavButton active={view === "form" && !previewOnly} icon="+" label="Isi laporan" onClick={() => startReport(currentShift())} prominent /><NavButton active={view === "records" || previewOnly} icon="▤" label="Rekod" onClick={() => leaveForm("records")} /><NavButton active={view === "stats"} icon="▥" label="Statistik" onClick={() => leaveForm("stats")} /></nav>
@@ -344,42 +350,45 @@ function ReportPreview({ report }: { report: Report }) {
   </article>;
 }
 
-function PeriodPicker({ period, anchor, onPeriod, onAnchor }: { period: StatsPeriod; anchor: string; onPeriod: (period: StatsPeriod) => void; onAnchor: (date: string) => void }) {
-  const currentYear = Number(anchor.slice(0, 4)) || new Date().getFullYear();
-  const years = Array.from({ length: 9 }, (_, index) => new Date().getFullYear() - 4 + index);
-  return <div className="period-picker">
-    <div className="segmented period-switch">
-      <button className={period === "week" ? "selected" : ""} onClick={() => onPeriod("week")}>Minggu</button>
-      <button className={period === "month" ? "selected" : ""} onClick={() => onPeriod("month")}>Bulan</button>
-      <button className={period === "year" ? "selected" : ""} onClick={() => onPeriod("year")}>Tahun</button>
-    </div>
-    {period === "week" ? <input aria-label="Pilih minggu" type="date" value={anchor} onChange={(event) => onAnchor(event.target.value)} /> : null}
-    {period === "month" ? <input aria-label="Pilih bulan" type="month" value={anchor.slice(0, 7)} onChange={(event) => onAnchor(`${event.target.value}-01`)} /> : null}
-    {period === "year" ? <select aria-label="Pilih tahun" value={currentYear} onChange={(event) => onAnchor(`${event.target.value}-01-01`)}>{years.map((year) => <option key={year}>{year}</option>)}</select> : null}
-  </div>;
+function PeriodNavigator({ period, anchor, today, onPeriod, onAnchor }: { period: StatsPeriod; anchor: string; today: string; onPeriod: (period: StatsPeriod) => void; onAnchor: (date: string) => void }) {
+  const range = periodRange(period, anchor);
+  const nextAnchor = shiftPeriodAnchor(period, anchor, 1);
+  const nextRange = periodRangeForUi(period, nextAnchor);
+  const label = periodLabel(period, range.start, range.end);
+  return <section className="period-panel">
+    <div className="segmented period-switch"><button className={period === "week" ? "selected" : ""} onClick={() => onPeriod("week")}>Mingguan</button><button className={period === "month" ? "selected" : ""} onClick={() => onPeriod("month")}>Bulanan</button><button className={period === "year" ? "selected" : ""} onClick={() => onPeriod("year")}>Tahunan</button></div>
+    <div className="period-navigation"><button className="secondary" onClick={() => onAnchor(shiftPeriodAnchor(period, anchor, -1))}>← Sebelumnya</button><strong>{label}</strong><button className="secondary" disabled={nextRange.start > today} onClick={() => onAnchor(nextAnchor)}>Seterusnya →</button></div>
+  </section>;
 }
 
 function TrendChart({ groups }: { groups: RemoteStats["groups"] }) {
   const max = Math.max(1, ...groups.map((group) => group.cases));
   if (!groups.length) return <Empty title="Belum ada data dalam tempoh ini" text="Graf akan muncul selepas laporan syif disimpan." />;
-  return <div className="trend-chart" role="img" aria-label="Graf jumlah pesakit mengikut tempoh">
-    {groups.map((group) => {
-      const label = group.key.length === 7
-        ? new Intl.DateTimeFormat("ms-MY", { month: "short" }).format(new Date(`${group.key}-01T12:00:00`))
-        : new Intl.DateTimeFormat("ms-MY", { day: "numeric", month: "short" }).format(new Date(`${group.key}T12:00:00`));
-      return <div className="trend-column" key={group.key}>
-        <span className="trend-value">{group.cases}</span>
-        <div className="trend-stack" style={{ height: `${Math.max(8, (group.cases / max) * 150)}px` }}>
-          <i className="trend-red" style={{ flex: group.merah || 0 }} />
-          <i className="trend-yellow" style={{ flex: group.kuning || 0 }} />
-          <i className="trend-green" style={{ flex: group.hijau || 0 }} />
-        </div>
-        <small>{label}</small>
-      </div>;
-    })}
-  </div>;
+  const width = Math.max(600, groups.length * 54);
+  const points = groups.map((group, index) => `${32 + index * ((width - 64) / Math.max(1, groups.length - 1))},${170 - (group.cases / max) * 130}`).join(" ");
+  return <div className="trend-scroll"><div className="line-chart" style={{ minWidth: width }} role="img" aria-label="Graf trend jumlah pesakit"><svg viewBox={`0 0 ${width} 205`} preserveAspectRatio="none"><line x1="32" y1="170" x2={width - 32} y2="170" className="chart-axis" /><polyline points={points} className="trend-line" />{groups.map((group, index) => { const x = 32 + index * ((width - 64) / Math.max(1, groups.length - 1)); const y = 170 - (group.cases / max) * 130; return <g key={group.key}><circle cx={x} cy={y} r="5" className="trend-dot"><title>{`${trendLabel(group.key)}: ${group.cases} pesakit`}</title></circle><text x={x} y={Math.max(18, y - 12)} className="trend-number">{group.cases}</text><text x={x} y="194" className="trend-label">{trendLabel(group.key)}</text></g>; })}</svg></div></div>;
 }
 
+function LevelBarChart({ totals }: { totals: StatsTotals }) {
+  const keys = ["l1", "l2", "l3", "l4", "l5"] as const;
+  const max = Math.max(1, ...keys.map((key) => totals[key]));
+  return <div className="level-bars">{keys.map((key) => <div className="level-bar-row" key={key}><b>{key.toUpperCase()}</b><div><i style={{ width: `${(totals[key] / max) * 100}%` }} /></div><strong>{totals[key]}</strong></div>)}</div>;
+}
+
+function DetailTable({ totals }: { totals: StatsTotals }) {
+  const rows: Array<[string, number]> = [["L1", totals.l1], ["L2", totals.l2], ["L3", totals.l3], ["L4", totals.l4], ["L5", totals.l5], ["Red Zone", totals.merah], ["Yellow Zone", totals.kuning], ["Green Zone", totals.hijau], ["Asthma", totals.asthma]];
+  return <div className="detail-table"><div className="detail-head"><span>Kategori</span><span>Jumlah</span><span>%</span></div>{rows.map(([label, value]) => <div key={label}><strong>{label}</strong><span>{value}</span><span>{percentage(value, totals.cases)}%</span></div>)}</div>;
+}
+
+function percentage(value: number, total: number) { return total ? Number(((value / total) * 100).toFixed(1)) : 0; }
+function isoDate(value: Date) { return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`; }
+function periodRangeForUi(period: StatsPeriod, anchor: string) { return periodRange(period, anchor); }
+function shiftPeriodAnchor(period: StatsPeriod, anchor: string, direction: -1 | 1) { const [year, month, day] = anchor.split("-").map(Number); const date = new Date(year, month - 1, day || 1); if (period === "week") date.setDate(date.getDate() + direction * 7); else if (period === "month") date.setMonth(date.getMonth() + direction); else date.setFullYear(date.getFullYear() + direction); return isoDate(date); }
+function periodLabel(period: StatsPeriod, start: string, end: string) { if (period === "year") return `Tahun ${start.slice(0, 4)}`; if (period === "month") return new Intl.DateTimeFormat("ms-MY", { month: "long", year: "numeric" }).format(new Date(`${start}T12:00:00`)); const startDate = new Date(`${start}T12:00:00`); const endDate = new Date(`${end}T12:00:00`); const sameMonth = start.slice(0, 7) === end.slice(0, 7); return sameMonth ? `${startDate.getDate()} – ${new Intl.DateTimeFormat("ms-MY", { day: "numeric", month: "long", year: "numeric" }).format(endDate)}` : `${formatDate(start, true)} – ${formatDate(end, true)}`; }
+function averagePerDay(total: number, start?: string, end?: string) { if (!start || !end) return "0.0"; const days = Math.round((new Date(`${end}T12:00:00`).getTime() - new Date(`${start}T12:00:00`).getTime()) / 86_400_000) + 1; return (total / Math.max(1, days)).toFixed(1); }
+function trendLabel(key: string) { return key.length === 7 ? new Intl.DateTimeFormat("ms-MY", { month: "short" }).format(new Date(`${key}-01T12:00:00`)) : new Intl.DateTimeFormat("ms-MY", { day: "numeric", month: "short" }).format(new Date(`${key}T12:00:00`)); }
+function completeTrendGroups(stats: RemoteStats | null): RemoteStats["groups"] { if (!stats) return []; const byKey = new Map(stats.groups.map((group) => [group.key, group])); const blank = (): StatsTotals => ({ cases: 0, merah: 0, kuning: 0, hijau: 0, l1: 0, l2: 0, l3: 0, l4: 0, l5: 0, asthma: 0, oscc: 0, kesBaru: 0, kesUlangan: 0, ward: 0, ambulance: 0, calls: 0, bid: 0, did: 0 }); const keys: string[] = []; if (stats.period === "year") { for (let month = 1; month <= 12; month += 1) keys.push(`${stats.start.slice(0, 4)}-${String(month).padStart(2, "0")}`); } else { const cursor = new Date(`${stats.start}T12:00:00`); const end = new Date(`${stats.end}T12:00:00`); while (cursor <= end) { keys.push(isoDate(cursor)); cursor.setDate(cursor.getDate() + 1); } } return keys.map((key) => byKey.get(key) || { key, ...blank() }); }
+
 function summarize(reports: Report[]) {
-  return reports.reduce((a, r) => { const zone = derived(r); return ({ cases: a.cases + totalCases(r), merah: a.merah + zone.merah, kuning: a.kuning + zone.kuning, hijau: a.hijau + zone.hijau, ward: a.ward + r.stats.masukWad, ambulance: a.ambulance + r.ambulances.length, calls: a.calls + totalCalls(r), bid: a.bid + r.bid, did: a.did + r.did, asthma: a.asthma + r.stats.asthmaBay, oscc: a.oscc + r.stats.oscc, l1: a.l1 + r.stats.l1, l2: a.l2 + r.stats.l2, l3: a.l3 + r.stats.l3, l4: a.l4 + r.stats.l4, l5: a.l5 + r.stats.l5 }); }, { cases: 0, merah: 0, kuning: 0, hijau: 0, ward: 0, ambulance: 0, calls: 0, bid: 0, did: 0, asthma: 0, oscc: 0, l1: 0, l2: 0, l3: 0, l4: 0, l5: 0 });
+  return reports.reduce((a, r) => { const zone = derived(r); return ({ cases: a.cases + totalCases(r), merah: a.merah + zone.merah, kuning: a.kuning + zone.kuning, hijau: a.hijau + zone.hijau, ward: a.ward + r.stats.masukWad, ambulance: a.ambulance + r.ambulances.length, calls: a.calls + totalCalls(r), bid: a.bid + r.bid, did: a.did + r.did, asthma: a.asthma + r.stats.asthmaBay, oscc: a.oscc + r.stats.oscc, l1: a.l1 + r.stats.l1, l2: a.l2 + r.stats.l2, l3: a.l3 + r.stats.l3, l4: a.l4 + r.stats.l4, l5: a.l5 + r.stats.l5, kesBaru: a.kesBaru + zone.kesBaru, kesUlangan: a.kesUlangan + zone.kesUlangan }); }, { cases: 0, merah: 0, kuning: 0, hijau: 0, ward: 0, ambulance: 0, calls: 0, bid: 0, did: 0, asthma: 0, oscc: 0, l1: 0, l2: 0, l3: 0, l4: 0, l5: 0, kesBaru: 0, kesUlangan: 0 });
 }
