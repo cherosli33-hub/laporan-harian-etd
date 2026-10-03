@@ -1,6 +1,8 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { usesPHC, reportWithCalls, reportCallsTotal, fieldCalls, callLabels, callsTotal, type CallState } from "./lib/phcCalls";
+import { operationalDateForReport, operationalDateFromTimestamp } from "./lib/operationalDate";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Report, Shift, StatKey, emptyReport, normalizeReport } from "./lib/types";
 import { localReportRepository } from "./lib/localReportRepository";
 import { RemoteStats, StatsPeriod, StatsTotals, periodRange, reportRepository } from "./lib/reportRepository";
@@ -22,7 +24,7 @@ const previousDateISO = (date: string) => {
   value.setDate(value.getDate() - 1);
   return value.toLocaleDateString("en-CA", { timeZone: "Asia/Kuala_Lumpur" });
 };
-const operationalDateISO = () => malaysiaMinutes() < 7 * 60 ? previousDateISO(todayISO()) : todayISO();
+const operationalDateISO = () => operationalDateFromTimestamp(new Date());
 const reportingDateForShift = (shift: Shift) => shift === "Malam" && malaysiaMinutes() < 7 * 60 ? previousDateISO(todayISO()) : todayISO();
 const currentShift = (): Shift => {
   const minutes = malaysiaMinutes();
@@ -46,7 +48,7 @@ const withDerived = (r: Report): Report => {
   const calculated = derived(r);
   return { ...r, stats: { ...r.stats, ...calculated } };
 };
-const totalCalls = (r: Report) => Object.values(r.calls).reduce((a, b) => a + b, 0);
+const totalCalls = (r: Report) => reportCallsTotal(r);
 const blankStaff = (category = "Pegawai Perubatan") => ({ id: crypto.randomUUID(), name: "", category });
 const blankAmbulance = () => ({ id: crypto.randomUUID(), vehicleNo: "", destination: "", driver: "", drivers: [""], timeOut: "", timeIn: "", unit: "" });
 const upsertReport = (list: Report[], report: Report) => {
@@ -78,6 +80,33 @@ export default function Home() {
   const [busy, setBusy] = useState(false);
   const [ready, setReady] = useState(false);
   const [previewOnly, setPreviewOnly] = useState(false);
+
+  const statsRequest = useRef(0);
+  const [callRefresh, setCallRefresh] = useState(0);
+  const [formCalls, setFormCalls] = useState<{ key: string; state: CallState } | null>(null);
+  const [dailyCalls, setDailyCalls] = useState<{ key: string; state: CallState } | null>(null);
+  const callDate = operationalDateForReport(draft);
+  const callKey = `${callDate}_${draft.shift}`;
+  const displayDraft = usesPHC(callDate) ? reportWithCalls(draft, formCalls?.key === callKey ? formCalls.state : { status: "loading" }) : draft;
+  const retryCalls = () => { setFormCalls(null); setDailyCalls(null); setCallRefresh(value => value + 1); };
+  useEffect(() => {
+    const onFocus = () => { retryCalls(); reportRepository.clearStatisticsCache(); };
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, []);
+  useEffect(() => {
+    if (view !== "form" || !usesPHC(callDate)) return;
+    let current = true;
+    void reportRepository.getCalls(callDate, draft.shift).then(state => { if (current) setFormCalls({ key: callKey, state }); });
+    return () => { current = false; };
+  }, [callDate, callKey, draft.shift, view, callRefresh]);
+  const dashboardDate = operationalDateISO();
+  useEffect(() => {
+    if (view !== "dashboard" || !usesPHC(dashboardDate)) return;
+    let current = true;
+    void reportRepository.getCalls(dashboardDate).then(state => { if (current) setDailyCalls({ key: dashboardDate, state }); });
+    return () => { current = false; };
+  }, [dashboardDate, view, callRefresh]);
 
   useEffect(() => {
     queueMicrotask(() => {
@@ -137,6 +166,7 @@ export default function Home() {
   const startReport = (shift: Shift, date = reportingDateForShift(shift)) => {
     const existing = reports.find((r) => r.id === `${date}_${shift}`);
     const remembered = localReportRepository.getDraft(`${date}_${shift}`);
+    setFormCalls(null);
     setPreviewOnly(false);
     setDraft(normalizeReport(remembered ? structuredClone(remembered) : existing ? structuredClone(existing) : emptyReport(date, shift)));
     setStep(0);
@@ -149,12 +179,13 @@ export default function Home() {
       setDrafts(localReportRepository.getDrafts());
     }
     if (previewOnly) setPreviewOnly(false);
+    if (nextView === "dashboard") setDailyCalls(null);
     setView(nextView);
   };
-  const updateDraft = (patch: Partial<Report>) => setDraft((d) => ({ ...d, ...patch }));
+  const updateDraft = (patch: Partial<Report>) => setDraft((d) => ({ ...d, ...patch, ...(patch.date ? { operationalDate: patch.date } : {}) }));
   const updateStat = (key: StatKey, value: number) => setDraft((d) => ({ ...d, stats: { ...d.stats, [key]: Math.max(0, value || 0) } }));
   const updateCarry = (key: keyof Report["carry"], value: number) => setDraft((d) => ({ ...d, carry: { ...d.carry, [key]: Math.max(0, value || 0) } }));
-  const updateCall = (key: keyof Report["calls"], value: number) => setDraft((d) => ({ ...d, calls: { ...d.calls, [key]: Math.max(0, value || 0) } }));
+  const updateCall = (key: keyof Report["calls"], value: number) => { if (usesPHC(operationalDateForReport(draft))) return; setDraft((d) => ({ ...d, calls: { ...d.calls, [key]: Math.max(0, value || 0) } })); };
   const submit = (event: FormEvent) => { event.preventDefault(); if (!draft.filledBy.trim()) return notify("Sila isi nama pengisi dahulu"); void persist({ ...draft, id: `${draft.date}_${draft.shift}` }); };
   const remove = async (report: Report) => {
     if (!window.confirm(`Padam laporan ${report.shift}, ${formatDate(report.date)}?`)) return;
@@ -198,16 +229,22 @@ export default function Home() {
   };
   const loadStats = useCallback(async (refresh = false) => {
     setBusy(true);
-    try { setRemoteStats(await reportRepository.getStats(statsPeriod, statsAnchor, { refresh })); setSyncState("online"); }
-    catch (error) { setSyncState("offline"); notify(error instanceof Error ? error.message : "Statistik gagal dimuatkan."); }
-    finally { setBusy(false); }
+    setRemoteStats(null);
+    const request = ++statsRequest.current;
+    try { const data = await reportRepository.getStats(statsPeriod, statsAnchor, { refresh }); if (request === statsRequest.current) { setRemoteStats(data); setSyncState("online"); } }
+    catch (error) { if (request === statsRequest.current) { setSyncState("offline"); notify(error instanceof Error ? error.message : "Statistik gagal dimuatkan."); } }
+    finally { if (request === statsRequest.current) setBusy(false); }
   }, [statsAnchor, statsPeriod]);
   useEffect(() => {
     if (!ready || view !== "stats") return;
-    void loadStats();
-  }, [loadStats, ready, view]);
-  const printReport = (report: Report) => { setPreviewOnly(true); setDraft(structuredClone(report)); setStep(7); setView("form"); window.scrollTo({ top: 0, behavior: "smooth" }); };
+    const timer = window.setTimeout(() => void loadStats(), 0);
+    const cancelRequest = () => { statsRequest.current++; };
+    return () => { window.clearTimeout(timer); cancelRequest(); };
+  }, [loadStats, ready, view, callRefresh]);
+  const printReport = (report: Report) => { setFormCalls(null); setPreviewOnly(true); setDraft(structuredClone(report)); setStep(7); setView("form"); window.scrollTo({ top: 0, behavior: "smooth" }); };
   const dayTotals = summarize(todaysReports);
+  const dayCallState = dailyCalls?.key === today ? dailyCalls.state : { status: "loading" } as CallState;
+  const dayCallTotal = usesPHC(today) ? dayCallState.status === "ready" ? callsTotal(dayCallState.calls!) : null : dayTotals.calls;
   const periodTotals = remoteStats?.totals || summarize([]);
 
   return (
@@ -258,7 +295,7 @@ export default function Home() {
           </div>
           <div className="metric-grid dashboard-metrics"><Metric label="Jumlah kes" value={dayTotals.cases} accent="emerald" icon="✚" /><Metric label="Kes merah" value={dayTotals.merah} accent="red" icon="●" /><Metric label="Kes kuning" value={dayTotals.kuning} accent="yellow" icon="●" /><Metric label="Kes hijau" value={dayTotals.hijau} accent="green" icon="●" /><Metric label="Asthma Bay" value={dayTotals.asthma} accent="purple" icon="◌" /><Metric label="OSCC" value={dayTotals.oscc} accent="pink" icon="◇" /><Metric label="Masuk wad" value={dayTotals.ward} accent="blue" icon="▣" /><Metric label="Ambulans" value={dayTotals.ambulance} accent="orange" icon="➜" /></div>
         </section>
-        <section className="quick-strip"><div><span>Jumlah panggilan kecemasan</span><strong>{dayTotals.calls}</strong></div><div><span>BID / DID</span><strong>{dayTotals.bid} / {dayTotals.did}</strong></div><button onClick={() => setView("stats")}>Lihat statistik <span>→</span></button></section>
+        <section className="quick-strip"><div><span>Jumlah panggilan kecemasan</span><strong>{dayCallTotal ?? "—"}</strong>{usesPHC(today) && <CallStatus state={dayCallState} retry={retryCalls} />}</div><div><span>BID / DID</span><strong>{dayTotals.bid} / {dayTotals.did}</strong></div><button onClick={() => setView("stats")}>Lihat statistik <span>→</span></button></section>
       </div>}
 
       {ready && view === "form" && <form className="page form-page" onSubmit={submit}>
@@ -304,8 +341,11 @@ export default function Home() {
               <Field label="Masa keluar"><input type="time" value={item.timeOut} onChange={(e) => setDraft((d) => ({ ...d, ambulances: d.ambulances.map((a) => a.id === item.id ? { ...a, timeOut: e.target.value } : a) }))} /></Field><Field label="Masa balik"><input type="time" value={item.timeIn} onChange={(e) => setDraft((d) => ({ ...d, ambulances: d.ambulances.map((a) => a.id === item.id ? { ...a, timeIn: e.target.value } : a) }))} /></Field>
             </div></article>)}
           </div><button type="button" className="add-btn" onClick={() => setDraft((d) => ({ ...d, ambulances: [...d.ambulances, blankAmbulance()] }))}>+ Tambah perjalanan</button></Step>}
-          {step === 6 && <Step title="Panggilan kecemasan" subtitle="Catat bilangan panggilan yang diterima mengikut sumber."><div className="counter-grid">{(["mecc", "operator", "awam", "palsu"] as const).map((key) => <Counter key={key} label={key === "mecc" ? "MECC / Call Centre" : key[0].toUpperCase() + key.slice(1)} value={draft.calls[key]} onChange={(v) => updateCall(key, v)} tone={key} />)}</div><div className="total-band"><span>Jumlah panggilan</span><strong>{totalCalls(draft)}</strong></div><Field label="Catatan panggilan" hint="Pilihan"><textarea rows={4} value={draft.callNotes} onChange={(e) => updateDraft({ callNotes: e.target.value })} placeholder="Maklumat tambahan…" /></Field></Step>}
-          {step === 7 && <Step title={previewOnly ? "Pratonton cetakan" : "Semakan akhir"} subtitle={previewOnly ? "Semak susunan laporan A4 sebelum membuka pilihan cetak telefon." : "Semak semua maklumat sebelum menyimpan laporan ke Firebase."}><ReportPreview report={draft} /><div className="review-actions no-print">{previewOnly ? <><button type="button" className="secondary" onClick={() => leaveForm("records")}>← Kembali ke Rekod</button><button type="button" className="primary" onClick={() => window.print()}>⎙ Cetak Laporan</button></> : <><button type="button" className="secondary" onClick={() => window.print()}>⎙ Cetak A4</button><button type="submit" className="primary" disabled={busy}>{busy ? "Menyimpan…" : "Simpan ke Firebase"}</button></>}</div></Step>}
+          {step === 6 && <Step title="Panggilan kecemasan" subtitle={usesPHC(callDate) ? "Data automatik daripada PHC" : "Rekod panggilan sebelum integration PHC."}>
+            {usesPHC(callDate) ? <><span className="phc-label">AUTO • PHC</span><p>Hanya kes PHC completed yang telah berjaya sync dikira untuk tarikh operasi dan syif ini. Draft serta rekod yang masih menunggu sync belum dikira.</p><CallStatus state={displayDraft.callData!} retry={retryCalls} /><div className="counter-grid">{Object.entries(callLabels).map(([key, label]) => <div className={`counter tone-${key} phc-readonly`} key={key}><span>{label}</span><output aria-label={label}>{fieldCalls(displayDraft)?.[key as keyof Report["calls"]] ?? "—"}</output></div>)}</div></> : <div className="counter-grid">{Object.entries(callLabels).map(([key, label]) => <Counter key={key} label={label} value={draft.calls[key as keyof Report["calls"]]} onChange={v => updateCall(key as keyof Report["calls"], v)} tone={key} />)}</div>}
+            <div className="total-band"><span>Jumlah panggilan</span><strong>{totalCalls(displayDraft) ?? "—"}</strong></div><Field label="Catatan panggilan" hint="Pilihan"><textarea rows={4} value={draft.callNotes} onChange={e => updateDraft({ callNotes: e.target.value })} placeholder="Maklumat tambahan…" /></Field></Step>}
+
+          {step === 7 && <Step title={previewOnly ? "Pratonton cetakan" : "Semakan akhir"} subtitle={previewOnly ? "Semak susunan laporan A4 sebelum membuka pilihan cetak telefon." : "Semak semua maklumat sebelum menyimpan laporan ke Firebase."}><ReportPreview report={displayDraft} /><div className="review-actions no-print">{previewOnly ? <><button type="button" className="secondary" onClick={() => leaveForm("records")}>← Kembali ke Rekod</button><button type="button" className="primary" disabled={usesPHC(callDate) && displayDraft.callData?.status !== "ready"} onClick={() => window.print()}>⎙ Cetak Laporan</button></> : <><button type="button" className="secondary" disabled={usesPHC(callDate) && displayDraft.callData?.status !== "ready"} onClick={() => window.print()}>⎙ Cetak A4</button><button type="submit" className="primary" disabled={busy || (usesPHC(callDate) && displayDraft.callData?.status !== "ready")}>{busy ? "Menyimpan…" : "Simpan ke Firebase"}</button></>}</div></Step>}
         </section>
         {!previewOnly ? <div className="form-nav no-print"><button type="button" className="secondary" disabled={step === 0} onClick={() => setStep((s) => Math.max(0, s - 1))}>← Sebelum</button>{step < 7 ? <button type="button" className="primary" onClick={() => setStep((s) => Math.min(7, s + 1))}>Seterusnya →</button> : null}</div> : null}
       </form>}
@@ -322,13 +362,19 @@ export default function Home() {
         <section className="level-card"><div className="section-heading"><div><p className="eyebrow">SENSUS L1 – L5</p><h2>Tahap kes</h2></div></div><LevelBarChart totals={periodTotals} /></section>
         <section className="stats-section"><div className="section-heading"><div><p className="eyebrow">MENGIKUT ZON</p><h2>Pecahan pesakit</h2></div></div><div className="zone-stat-grid">{[["Red Zone", periodTotals.merah, "red"], ["Yellow Zone", periodTotals.kuning, "yellow"], ["Green Zone", periodTotals.hijau, "green"]].map(([name, value, tone]) => <article className={`zone-stat zone-stat-${tone}`} key={name}><span>{name}</span><strong>{value}</strong><small>{percentage(Number(value), periodTotals.cases)}% daripada keseluruhan</small></article>)}</div></section>
         <section className="level-card chart-card"><div className="section-heading"><div><p className="eyebrow">TREND PESAKIT</p><h2>{statsPeriod === "week" ? "Mengikut hari" : statsPeriod === "month" ? "Mengikut tarikh" : "Mengikut bulan"}</h2></div></div><TrendChart groups={completeTrendGroups(remoteStats)} /></section>
-        <section className="level-card detail-card"><div className="section-heading"><div><p className="eyebrow">PECAHAN TERPERINCI</p><h2>Ringkasan kategori</h2></div></div><DetailTable totals={periodTotals} /></section>
+        <section className="level-card detail-card"><div className="section-heading"><div><p className="eyebrow">PECAHAN TERPERINCI</p><h2>Ringkasan kategori</h2></div></div><DetailTable totals={periodTotals} />
+        {usesPHC(periodRange(statsPeriod, statsAnchor).end) && <section className="level-card"><h3>Panggilan kecemasan</h3><strong>{remoteStats?.callState?.status === "ready" ? periodTotals.calls : "—"}</strong><CallStatus state={remoteStats?.callState || { status: busy ? "loading" : "error" }} retry={() => void loadStats(true)} /></section>}</section>
       </div>}
 
       <nav className="bottom-nav no-print" aria-label="Navigasi utama"><NavButton active={view === "dashboard"} icon="⌂" label="Utama" onClick={() => leaveForm("dashboard")} /><NavButton active={view === "form" && !previewOnly} icon="+" label="Isi laporan" onClick={() => startReport(currentShift())} prominent /><NavButton active={view === "records" || previewOnly} icon="▤" label="Rekod" onClick={() => leaveForm("records")} /><NavButton active={view === "stats"} icon="▥" label="Statistik" onClick={() => leaveForm("stats")} /></nav>
       {toast ? <div className="toast no-print">✓ {toast}</div> : null}
     </main>
   );
+}
+
+function CallStatus({ state, retry }: { state: CallState; retry?: () => void }) {
+  if (state.status === "ready") return retry ? <div className="phc-status no-print"><button type="button" onClick={retry}>Muat semula PHC</button></div> : null;
+  return <div className="phc-status" role={state.status === "error" ? "alert" : "status"}>{state.status === "loading" ? "Memuatkan panggilan PHC…" : "Data panggilan PHC tidak dapat dimuatkan. Cuba semula."}{retry && <button type="button" onClick={retry}>Cuba semula</button>}</div>;
 }
 
 function Step({ title, subtitle, children }: { title: string; subtitle: string; children: React.ReactNode }) { return <><div className="card-heading"><div><p className="eyebrow">BORANG LAPORAN</p><h2>{title}</h2><p>{subtitle}</p></div></div><div className="step-content">{children}</div></>; }
@@ -344,7 +390,7 @@ function ReportPreview({ report }: { report: Report }) {
     <section className="preview-summary"><div><span>Diisi oleh</span><strong>{report.filledBy || "Belum diisi"}</strong></div><div><span>Jumlah kes</span><strong>{totalCases(report)}</strong></div><div><span>Kakitangan</span><strong>{report.staff.length}</strong></div><div><span>Ambulans / kenderaan</span><strong>{report.ambulances.length}</strong></div></section>
     <section><h3>Statistik kes</h3><div className="print-stats">{(["l1", "l2", "l3", "l4", "l5", "asthmaBay"] as const).map((key) => <div key={key}><span>{labels[key]}</span><b>{report.stats[key]}</b></div>)}<div><span>Zon Merah</span><b>{derived(report).merah}</b></div><div><span>Zon Kuning</span><b>{derived(report).kuning}</b></div><div><span>Zon Hijau</span><b>{derived(report).hijau}</b></div><div><span>Kes Baru</span><b>{derived(report).kesBaru}</b></div><div><span>Kes Ulangan</span><b>{derived(report).kesUlangan}</b></div><div><span>OSCC</span><b>{report.stats.oscc}</b></div><div><span>Masuk Wad</span><b>{report.stats.masukWad}</b></div></div></section>
     <section className="preview-columns"><div><h3>Kakitangan bertugas</h3>{report.staff.length ? <ul>{report.staff.map((s) => <li key={s.id}><span>{s.name || "—"}</span><small>{s.category}</small></li>)}</ul> : <p>Tiada rekod</p>}</div><div><h3>Carry forward</h3><ul><li><span>Zon Merah</span><b>{report.carry.merah}</b></li><li><span>Zon Kuning</span><b>{report.carry.kuning}</b></li><li><span>Observation Ward</span><b>{report.carry.observation}</b></li></ul></div></section>
-    <section className="preview-columns"><div><h3>Laporan kes</h3><p><strong>BID: {report.bid} &nbsp; DID: {report.did}</strong></p><p>{report.caseNotes || "Tiada catatan."}</p></div><div><h3>Panggilan kecemasan</h3><ul>{Object.entries(report.calls).map(([key, val]) => <li key={key}><span>{key.toUpperCase()}</span><b>{val}</b></li>)}</ul></div></section>
+    <section className="preview-columns"><div><h3>Laporan kes</h3><p><strong>BID: {report.bid} &nbsp; DID: {report.did}</strong></p><p>{report.caseNotes || "Tiada catatan."}</p></div><div><h3>Panggilan kecemasan</h3><ul>{Object.entries(report.calls).map(([key, val]) => <li key={key}><span>{callLabels[key as keyof Report["calls"]]}</span><b>{fieldCalls(report) ? val : "—"}</b></li>)}</ul><p><strong>Jumlah: {totalCalls(report) ?? "—"}</strong></p>{usesPHC(operationalDateForReport(report)) && <CallStatus state={report.callData || { status: "loading" }} />}<p>{report.callNotes}</p></div></section>
     <section><h3>Pergerakan Ambulans & Kenderaan</h3>{report.ambulances.length ? <div className="print-table"><div><b>No.</b><b>Destinasi / unit</b><b>Pemandu</b><b>Masa</b></div>{report.ambulances.map((a) => <div key={a.id}><span>{a.vehicleNo || "—"}</span><span>{a.destination || "—"} · {a.unit || "—"}</span><span>{a.drivers.filter(Boolean).join(", ") || a.driver || "—"}</span><span>{a.timeOut || "—"} – {a.timeIn || "—"}</span></div>)}</div> : <p>Tiada pergerakan ambulans atau kenderaan.</p>}</section>
     <footer>Rekod rasmi Laporan Harian ETD · Dikemas kini {new Date(report.updatedAt).toLocaleString("ms-MY")}</footer>
   </article>;
@@ -390,5 +436,5 @@ function trendLabel(key: string) { return key.length === 7 ? new Intl.DateTimeFo
 function completeTrendGroups(stats: RemoteStats | null): RemoteStats["groups"] { if (!stats) return []; const byKey = new Map(stats.groups.map((group) => [group.key, group])); const blank = (): StatsTotals => ({ cases: 0, merah: 0, kuning: 0, hijau: 0, l1: 0, l2: 0, l3: 0, l4: 0, l5: 0, asthma: 0, oscc: 0, kesBaru: 0, kesUlangan: 0, ward: 0, ambulance: 0, calls: 0, bid: 0, did: 0 }); const keys: string[] = []; if (stats.period === "year") { for (let month = 1; month <= 12; month += 1) keys.push(`${stats.start.slice(0, 4)}-${String(month).padStart(2, "0")}`); } else { const cursor = new Date(`${stats.start}T12:00:00`); const end = new Date(`${stats.end}T12:00:00`); while (cursor <= end) { keys.push(isoDate(cursor)); cursor.setDate(cursor.getDate() + 1); } } return keys.map((key) => byKey.get(key) || { key, ...blank() }); }
 
 function summarize(reports: Report[]) {
-  return reports.reduce((a, r) => { const zone = derived(r); return ({ cases: a.cases + totalCases(r), merah: a.merah + zone.merah, kuning: a.kuning + zone.kuning, hijau: a.hijau + zone.hijau, ward: a.ward + r.stats.masukWad, ambulance: a.ambulance + r.ambulances.length, calls: a.calls + totalCalls(r), bid: a.bid + r.bid, did: a.did + r.did, asthma: a.asthma + r.stats.asthmaBay, oscc: a.oscc + r.stats.oscc, l1: a.l1 + r.stats.l1, l2: a.l2 + r.stats.l2, l3: a.l3 + r.stats.l3, l4: a.l4 + r.stats.l4, l5: a.l5 + r.stats.l5, kesBaru: a.kesBaru + zone.kesBaru, kesUlangan: a.kesUlangan + zone.kesUlangan }); }, { cases: 0, merah: 0, kuning: 0, hijau: 0, ward: 0, ambulance: 0, calls: 0, bid: 0, did: 0, asthma: 0, oscc: 0, l1: 0, l2: 0, l3: 0, l4: 0, l5: 0, kesBaru: 0, kesUlangan: 0 });
+  return reports.reduce((a, r) => { const zone = derived(r); return ({ cases: a.cases + totalCases(r), merah: a.merah + zone.merah, kuning: a.kuning + zone.kuning, hijau: a.hijau + zone.hijau, ward: a.ward + r.stats.masukWad, ambulance: a.ambulance + r.ambulances.length, calls: a.calls + (totalCalls(r) ?? 0), bid: a.bid + r.bid, did: a.did + r.did, asthma: a.asthma + r.stats.asthmaBay, oscc: a.oscc + r.stats.oscc, l1: a.l1 + r.stats.l1, l2: a.l2 + r.stats.l2, l3: a.l3 + r.stats.l3, l4: a.l4 + r.stats.l4, l5: a.l5 + r.stats.l5, kesBaru: a.kesBaru + zone.kesBaru, kesUlangan: a.kesUlangan + zone.kesUlangan }); }, { cases: 0, merah: 0, kuning: 0, hijau: 0, ward: 0, ambulance: 0, calls: 0, bid: 0, did: 0, asthma: 0, oscc: 0, l1: 0, l2: 0, l3: 0, l4: 0, l5: 0, kesBaru: 0, kesUlangan: 0 });
 }

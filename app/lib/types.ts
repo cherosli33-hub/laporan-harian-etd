@@ -22,6 +22,7 @@ export type VehicleMovement = {
 export type Report = {
   id: string;
   date: string;
+  operationalDate?: string;
   shift: Shift;
   filledBy: string;
   staff: StaffMember[];
@@ -34,6 +35,11 @@ export type Report = {
   ambulances: VehicleMovement[];
   calls: { mecc: number; operator: number; awam: number; palsu: number };
   callNotes: string;
+  /** Original manual values retained on first integrated save. */
+  legacyCalls?: Report["calls"];
+  callsSource?: "phc";
+  /** Transient read state; never a transport or source of truth. */
+  callData?: import("./phcCalls").CallState;
   createdAt: string;
   updatedAt: string;
 };
@@ -62,6 +68,7 @@ export const emptyReport = (date: string, shift: Shift): Report => {
   return {
     id: `${date}_${shift}`,
     date,
+    operationalDate: date,
     shift,
     filledBy: "",
     staff: [],
