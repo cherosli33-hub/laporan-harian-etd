@@ -100,6 +100,16 @@ export default function Home() {
     void reportRepository.getCalls(callDate, draft.shift).then(state => { if (current) setFormCalls({ key: callKey, state }); });
     return () => { current = false; };
   }, [callDate, callKey, draft.shift, view, callRefresh]);
+  // Re-query unique completed entities; never increment counters on refresh.
+  useEffect(() => {
+    if (view !== "form" && view !== "dashboard") return;
+    const refresh = () => { if (document.visibilityState === "visible" && navigator.onLine) setCallRefresh(value => value + 1); };
+    const timer = window.setInterval(refresh, 30000);
+    const visible = () => { if (document.visibilityState === "visible") retryCalls(); };
+    window.addEventListener("online", visible);
+    document.addEventListener("visibilitychange", visible);
+    return () => { window.clearInterval(timer); window.removeEventListener("online", visible); document.removeEventListener("visibilitychange", visible); };
+  }, [view]);
   const dashboardDate = operationalDateISO();
   useEffect(() => {
     if (view !== "dashboard" || !usesPHC(dashboardDate)) return;
@@ -251,7 +261,7 @@ export default function Home() {
     <main className="app-shell">
       <header className="topbar no-print">
         <div className="brand"><img className="brand-logo" src="/etd-logo.jpg" alt="Logo Jabatan Kecemasan dan Trauma Hospital Kuala Lipis" /><div><p className="eyebrow">E.T.D HOSPITAL KUALA LIPIS</p><h1>Laporan Harian ETD</h1></div></div>
-        <span className={`sync-badge ${syncState}`}><i />{syncState === "online" ? "🔥 Firebase aktif" : syncState === "loading" ? "Menyambung…" : "Draf luar talian"}</span>
+        <span className={`sync-badge ${syncState}`}><i />{syncState === "online" ? "✓ Laporan ETD: Firebase disahkan" : syncState === "loading" ? "Menyambung…" : "Draf luar talian"}</span>
       </header>
       {!ready ? <div className="loading">Menyiapkan ruang laporan…</div> : null}
 
@@ -342,7 +352,7 @@ export default function Home() {
             </div></article>)}
           </div><button type="button" className="add-btn" onClick={() => setDraft((d) => ({ ...d, ambulances: [...d.ambulances, blankAmbulance()] }))}>+ Tambah perjalanan</button></Step>}
           {step === 6 && <Step title="Panggilan kecemasan" subtitle={usesPHC(callDate) ? "Data automatik daripada PHC" : "Rekod panggilan sebelum integration PHC."}>
-            {usesPHC(callDate) ? <><span className="phc-label">AUTO • PHC</span><p>Hanya kes PHC completed yang telah berjaya sync dikira untuk tarikh operasi dan syif ini. Draft serta rekod yang masih menunggu sync belum dikira.</p><CallStatus state={displayDraft.callData!} retry={retryCalls} /><div className="counter-grid">{Object.entries(callLabels).map(([key, label]) => <div className={`counter tone-${key} phc-readonly`} key={key}><span>{label}</span><output aria-label={label}>{fieldCalls(displayDraft)?.[key as keyof Report["calls"]] ?? "—"}</output></div>)}</div></> : <div className="counter-grid">{Object.entries(callLabels).map(([key, label]) => <Counter key={key} label={label} value={draft.calls[key as keyof Report["calls"]]} onChange={v => updateCall(key as keyof Report["calls"], v)} tone={key} />)}</div>}
+            {usesPHC(callDate) ? <><span className="phc-label">AUTO • PHC</span><p><strong>Tarikh operasi: {callDate} · Syif: {draft.shift}</strong></p><p>Hanya kes PHC completed yang telah berjaya sync dikira untuk tarikh operasi dan syif ini. Draft serta rekod yang masih menunggu sync belum dikira.</p><CallStatus state={displayDraft.callData!} retry={retryCalls} /><div className="counter-grid">{Object.entries(callLabels).map(([key, label]) => <div className={`counter tone-${key} phc-readonly`} key={key}><span>{label}</span><output aria-label={label}>{fieldCalls(displayDraft)?.[key as keyof Report["calls"]] ?? "—"}</output></div>)}</div></> : <div className="counter-grid">{Object.entries(callLabels).map(([key, label]) => <Counter key={key} label={label} value={draft.calls[key as keyof Report["calls"]]} onChange={v => updateCall(key as keyof Report["calls"], v)} tone={key} />)}</div>}
             <div className="total-band"><span>Jumlah panggilan</span><strong>{totalCalls(displayDraft) ?? "—"}</strong></div><Field label="Catatan panggilan" hint="Pilihan"><textarea rows={4} value={draft.callNotes} onChange={e => updateDraft({ callNotes: e.target.value })} placeholder="Maklumat tambahan…" /></Field></Step>}
 
           {step === 7 && <Step title={previewOnly ? "Pratonton cetakan" : "Semakan akhir"} subtitle={previewOnly ? "Semak susunan laporan A4 sebelum membuka pilihan cetak telefon." : "Semak semua maklumat sebelum menyimpan laporan ke Firebase."}><ReportPreview report={displayDraft} /><div className="review-actions no-print">{previewOnly ? <><button type="button" className="secondary" onClick={() => leaveForm("records")}>← Kembali ke Rekod</button><button type="button" className="primary" disabled={usesPHC(callDate) && displayDraft.callData?.status !== "ready"} onClick={() => window.print()}>⎙ Cetak Laporan</button></> : <><button type="button" className="secondary" disabled={usesPHC(callDate) && displayDraft.callData?.status !== "ready"} onClick={() => window.print()}>⎙ Cetak A4</button><button type="submit" className="primary" disabled={busy || (usesPHC(callDate) && displayDraft.callData?.status !== "ready")}>{busy ? "Menyimpan…" : "Simpan ke Firebase"}</button></>}</div></Step>}
@@ -373,7 +383,7 @@ export default function Home() {
 }
 
 function CallStatus({ state, retry }: { state: CallState; retry?: () => void }) {
-  if (state.status === "ready") return retry ? <div className="phc-status no-print"><button type="button" onClick={retry}>Muat semula PHC</button></div> : null;
+  if (state.status === "ready") return <div className="phc-status phc-synced no-print" role="status"><div><strong>✓ Panggilan PHC disahkan dari Firebase</strong><p>{state.operationalDate ? `Tarikh operasi ${state.operationalDate} · ${state.shift || "Semua syif"}. ` : ""}{state.fetchedAt ? `Semakan terakhir ${new Date(state.fetchedAt).toLocaleTimeString("ms-MY", {timeZone:"Asia/Kuala_Lumpur"})}. ` : ""}Borang dan Home disemak semula setiap 30 saat semasa app aktif.</p><small>Rekod PHC yang belum sync pada peranti lain belum boleh dibaca di sini.</small></div>{retry && <button type="button" onClick={retry}>Muat semula PHC</button>}</div>;
   return <div className="phc-status" role={state.status === "error" ? "alert" : "status"}>{state.status === "loading" ? "Memuatkan panggilan PHC…" : "Data panggilan PHC tidak dapat dimuatkan. Cuba semula."}{retry && <button type="button" onClick={retry}>Cuba semula</button>}</div>;
 }
 

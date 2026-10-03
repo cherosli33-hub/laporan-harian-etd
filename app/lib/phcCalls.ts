@@ -8,7 +8,7 @@ export const PHC_SUMMARY_COLLECTION = 'phcCallSummaries';
 export const callLabels = { mecc: 'MECC / Call Centre', operator: 'Operator', awam: 'Awam', palsu: 'Palsu' };
 export type CallSource = keyof typeof callLabels;
 export type Calls = Report['calls'];
-export type CallState = { status: 'loading' | 'ready' | 'error'; calls?: Calls; message?: string };
+export type CallState = { status: 'loading' | 'ready' | 'error'; calls?: Calls; message?: string; fetchedAt?: string; operationalDate?: string; shift?: string };
 export type PHCSummary = { phcId: string; status: string; operationalDate: string; shift: string; callSource: string; deleted?: boolean; deletedAt?: string | null };
 export const emptyCalls = (): Calls => ({ mecc: 0, operator: 0, awam: 0, palsu: 0 });
 export const callsTotal = (calls: Calls) => Object.values(calls).reduce((sum, n) => sum + n, 0);

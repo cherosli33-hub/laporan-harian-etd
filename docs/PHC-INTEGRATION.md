@@ -52,3 +52,6 @@ Annual queries read one minimal summary per case. Projection reduces payload, no
 For shared-backend verification, keep both repos separate, prepare the PHC demo rules, start its Firestore emulator, then run ETD `tests/shared-backend.test.mjs` with `PHC_PROJECT_PATH` set to that checkout and `FIRESTORE_EMULATOR_HOST=127.0.0.1:8080`. The test refuses a non-local emulator host.
 
 ETD mobile test: `tests/mobile-integration.test.cjs`, a local app server, Playwright module via `PLAYWRIGHT_MODULE`, and optional `PHC_CHROMIUM_PATH`. It intercepts all external traffic and cannot write fixture records to production.
+
+### Pengesahan Firebase / refresh
+CallState ready kini membawa fetchedAt, operationalDate dan shift daripada query berjaya. UI memaparkan pengesahan + masa semakan; ini membuktikan data PHC yang tersedia telah dibaca dari Firebase, bukan semua device lain telah selesai upload. Home/borang refresh setiap 30 saat hanya semasa tab visible dan online, serta apabila kembali ke app. Kiraan kekal berdasarkan entiti unik. Service worker tidak cache domain Firebase/Auth; kegagalan rangkaian tidak boleh dipaparkan sebagai data cloud terkini.

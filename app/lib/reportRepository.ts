@@ -99,7 +99,7 @@ async function queryPHC(start: string, end = start, shift?: string): Promise<PHC
   });
 }
 async function phcState(start: string, end = start, shift?: Report["shift"]): Promise<CallState> {
-  try { return { status: "ready", calls: derivePHCCalls(await queryPHC(start, end, shift), start, end, shift) }; }
+  try { return { status: "ready", calls: derivePHCCalls(await queryPHC(start, end, shift), start, end, shift), fetchedAt: new Date().toISOString(), operationalDate: start === end ? start : `${start} – ${end}`, shift: shift || "Semua syif" }; }
   catch { return { status: "error", message: PHC_ERROR }; }
 }
 async function hydrateCalls(reports: Report[]): Promise<Report[]> {
@@ -108,7 +108,7 @@ async function hydrateCalls(reports: Report[]): Promise<Report[]> {
   const dates = active.map(operationalDateForReport).sort();
   try {
     const rows = await queryPHC(dates[0], dates[dates.length - 1]);
-    return reports.map(r => usesPHC(operationalDateForReport(r)) ? reportWithCalls(r, { status: "ready", calls: derivePHCCalls(rows, operationalDateForReport(r), operationalDateForReport(r), r.shift) }) : r);
+    return reports.map(r => usesPHC(operationalDateForReport(r)) ? reportWithCalls(r, { status: "ready", calls: derivePHCCalls(rows, operationalDateForReport(r), operationalDateForReport(r), r.shift), fetchedAt: new Date().toISOString(), operationalDate: operationalDateForReport(r), shift: r.shift }) : r);
   } catch { return reports.map(r => usesPHC(operationalDateForReport(r)) ? reportWithCalls(r, { status: "error", message: PHC_ERROR }) : r); }
 }
 
@@ -243,7 +243,7 @@ export const reportRepository = {
             if (!grouped.has(key)) grouped.set(key, emptyTotals());
             grouped.get(key)!.calls++;
           }
-          reports = reports.map(r => usesPHC(operationalDateForReport(r)) ? reportWithCalls(r, { status: "ready", calls: derivePHCCalls(rows, operationalDateForReport(r), operationalDateForReport(r), r.shift) }) : r);
+          reports = reports.map(r => usesPHC(operationalDateForReport(r)) ? reportWithCalls(r, { status: "ready", calls: derivePHCCalls(rows, operationalDateForReport(r), operationalDateForReport(r), r.shift), fetchedAt: new Date().toISOString(), operationalDate: operationalDateForReport(r), shift: r.shift }) : r);
           callState = { status: "ready", calls };
         } catch { callState = { status: "error", message: PHC_ERROR }; }
       }

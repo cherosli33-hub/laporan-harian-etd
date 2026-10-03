@@ -122,3 +122,20 @@ test('calendar dates reject rollover and cutover remains confirmed',()=>{
   assert.equal(phc.callsTotal(phc.derivePHCCalls([row('leap','palsu','pagi','2028-02-29')],'2028-02-01','2028-03-01')),1);
 });
 test.after(async()=>{await rm(dir,{recursive:true,force:true});});
+
+test('several calls sum within one operational shift; ready status carries server-query receipt', async () => {
+  rows = [row('P1','mecc','pagi'),row('P2','mecc','pagi'),row('T1','operator','petang'),row('M1','awam','malam'),row('D1','mecc','pagi','2026-10-03','draft')];
+  fail = false;
+  const morning = await reportRepository.getCalls('2026-10-03','Pagi');
+  assert.equal(morning.status,'ready');
+  assert.equal(morning.calls.mecc,2);
+  assert.equal(phc.callsTotal(morning.calls),2);
+  assert.equal(morning.operationalDate,'2026-10-03');
+  assert.equal(morning.shift,'Pagi');
+  assert.ok(Number.isFinite(Date.parse(morning.fetchedAt)));
+  assert.equal(phc.callsTotal((await reportRepository.getCalls('2026-10-03','Petang')).calls),1);
+  assert.equal(phc.callsTotal((await reportRepository.getCalls('2026-10-03','Malam')).calls),1);
+  const status = renderToStaticMarkup(createElement(CallStatus,{state:morning}));
+  assert.match(status,/disahkan dari Firebase/);
+  assert.match(status,/Pagi/);
+});
