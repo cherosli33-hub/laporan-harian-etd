@@ -1,4 +1,4 @@
-const CACHE="etd-laporan-v4-sync-status";const CORE=["/","/manifest.webmanifest","/etd-logo.jpg"];
+const CACHE="etd-laporan-v5-realtime-shifts";const CORE=["/","/manifest.webmanifest","/etd-logo.jpg"];
 self.addEventListener("install",e=>{self.skipWaiting();e.waitUntil(caches.open(CACHE).then(c=>c.addAll(CORE)))});
 self.addEventListener("activate",e=>e.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(k=>k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim())));
 // Never cache Firebase/Auth responses or report data as an offline success.

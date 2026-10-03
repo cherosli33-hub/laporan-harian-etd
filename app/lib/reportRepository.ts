@@ -107,7 +107,7 @@ async function hydrateCalls(reports: Report[]): Promise<Report[]> {
   if (!active.length) return reports;
   const dates = active.map(operationalDateForReport).sort();
   try {
-    const rows = await queryPHC(dates[0], dates[dates.length - 1]);
+    const rows = (await Promise.all([...new Set(dates)].map(date=>queryPHC(date)))).flat();
     return reports.map(r => usesPHC(operationalDateForReport(r)) ? reportWithCalls(r, { status: "ready", calls: derivePHCCalls(rows, operationalDateForReport(r), operationalDateForReport(r), r.shift), fetchedAt: new Date().toISOString(), operationalDate: operationalDateForReport(r), shift: r.shift }) : r);
   } catch { return reports.map(r => usesPHC(operationalDateForReport(r)) ? reportWithCalls(r, { status: "error", message: PHC_ERROR }) : r); }
 }
@@ -169,7 +169,7 @@ export const reportRepository = {
   apiUrl: `firebase://${PROJECT_ID}/${COLLECTION}`,
   cachedReports,
   async getCalls(date: string, shift?: Report["shift"]) { return phcState(date, date, shift); },
-  async getByDate(date: string) { const reports = await hydrateCalls(await queryRange(date)); cacheReports(date, reports); return reports; },
+  async getByDate(date: string, includeCalls = true) { const rows = await queryRange(date); const reports = includeCalls ? await hydrateCalls(rows) : rows; cacheReports(date, reports); return reports; },
   async getRange(start: string, end: string, shift: string = "Semua") { const reports = await hydrateCalls(await queryRange(start, end)); return shift === "Semua" ? reports : reports.filter((report) => report.shift === shift); },
   async getPage(pageSize = 10, pageToken = "", shift: string = "Semua"): Promise<RecordPage> {
     const url = new URL(baseUrl()); url.searchParams.set("pageSize", String(pageSize)); url.searchParams.set("orderBy", "date desc"); if (pageToken) url.searchParams.set("pageToken", pageToken);

@@ -29,9 +29,9 @@ const assert=require('node:assert/strict');
   }
   return route.abort();
  });
- const target=process.env.ETD_TEST_URL||'http://127.0.0.1:4174';
+ const target=process.env.ETD_TEST_URL||'http://127.0.0.1:4174/tests/ui/index.html';
  for(let n=0;n<40;n++){try{if((await fetch(target)).ok)break}catch{}await new Promise(resolve=>setTimeout(resolve,250))}
- await p.goto(target);
+ await p.clock.install({time:new Date('2026-10-04T08:00:00+08:00')});await p.goto(target);await p.evaluate(rows=>{window.liveRows=rows;window.emitLive();},rows);
  await p.locator('.page-dashboard').waitFor();
  await p.locator('.bottom-nav').getByRole('button',{name:/Isi laporan/}).click();
  await p.locator('form.form-page').waitFor();
@@ -43,15 +43,16 @@ const assert=require('node:assert/strict');
  await p.waitForFunction(()=>document.querySelector('output[aria-label="MECC / Call Centre"]')?.textContent==='2');
  assert.equal(await p.locator('output[aria-label="Awam"]').textContent(),'1');
  assert.equal(await p.locator('output[aria-label="Palsu"]').textContent(),'1');
- rows[0].callSource='awam';await p.getByRole('button',{name:'Muat semula PHC',exact:true}).click();
+ rows.push({phcId:'REALTIME',callSource:'operator',status:'completed',operationalDate:'2026-10-03',shift:'pagi',deleted:false});await p.evaluate(rows=>{window.liveRows=rows;window.emitLive();},rows);await p.waitForFunction(()=>document.querySelector('output[aria-label="Operator"]')?.textContent==='2');assert.ok((await p.locator('.phc-synced').innerText()).includes('Live — Firebase'));rows.pop();
+ rows[0].callSource='awam';await p.evaluate(rows=>{window.liveRows=rows;window.emitLive();},rows);
  await p.waitForFunction(()=>document.querySelector('output[aria-label="Awam"]')?.textContent==='2');
  assert.equal(await p.locator('output[aria-label="MECC / Call Centre"]').textContent(),'1');
- fail=true;await p.getByRole('button',{name:'Muat semula PHC',exact:true}).click();
- await p.getByRole('alert').filter({hasText:'Data panggilan PHC'}).waitFor();
+ fail=true;await p.evaluate(()=>{window.liveFail=true;window.emitLive();});
+ await p.getByRole('alert').filter({hasText:'Sync terganggu'}).waitFor();
  await p.getByRole('button',{name:'Langkah 8: Semakan',exact:true}).click();
  assert.equal(await p.getByRole('button',{name:'Simpan ke Firebase',exact:true}).isDisabled(),true);
  assert.equal(await p.getByRole('button',{name:/Cetak A4/}).isDisabled(),true);
- fail=false;await p.getByRole('button',{name:'Langkah 7: Panggilan',exact:true}).click();await p.getByRole('button',{name:'Cuba semula',exact:true}).click();
+ fail=false;await p.getByRole('button',{name:'Langkah 7: Panggilan',exact:true}).click();await p.evaluate(()=>{window.liveFail=false;window.emitLive();});
  await p.waitForFunction(()=>document.querySelector('output[aria-label="Awam"]')?.textContent==='2');
  await p.getByRole('button',{name:'Langkah 8: Semakan',exact:true}).click();
  assert.ok((await p.locator('.report-preview').innerText()).includes('Jumlah: 5'));
@@ -61,5 +62,22 @@ const assert=require('node:assert/strict');
  await p.locator('.bottom-nav').getByRole('button',{name:/Statistik/}).click();
  for(const label of ['Mingguan','Bulanan','Tahunan']){await p.getByRole('button',{name:label,exact:true}).click();await p.waitForFunction(()=>Array.from(document.querySelectorAll('h3')).some(h=>h.textContent==='Panggilan kecemasan'&&h.parentElement.querySelector('strong')?.textContent==='5'));}
  for(const width of [320,375,390,414]){await p.setViewportSize({width,height:844});assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,'overflow '+width)}
- assert.deepEqual(errors,[]);await browser.close();console.log('PASS ETD mobile: four sources, refresh after PHC edit, error/save/print guard, derived save, week/month/year, widths320-414, no JS error, no production test writes');
+ // No orphan listeners when changing date/shift/view, and automatic boundary change.
+ await p.locator('.bottom-nav').getByRole('button',{name:/Isi laporan/}).click();
+ await p.waitForFunction(()=>document.querySelector('form.form-page'));
+ await p.clock.fastForward(6*60*60*1000); // 08:00 -> 14:00; no Firestore poll
+ await p.waitForFunction(()=>document.querySelector('.form-heading h2')?.textContent.includes('Petang'));
+ assert.equal(await p.evaluate(()=>window.subscriptions.size),1);
+ await p.clock.fastForward(7*60*60*1000);
+ await p.waitForFunction(()=>document.querySelector('.form-heading h2')?.textContent.includes('Malam'));
+ await p.clock.fastForward(10*60*60*1000);
+ await p.waitForFunction(()=>document.querySelector('.form-heading h2')?.textContent.includes('Pagi')&&document.querySelector('form input[type="date"]')?.value==='2026-10-05');
+ assert.equal(await p.evaluate(()=>window.subscriptions.size),1);
+ await p.locator('form input[type="date"]').fill('2026-10-03');
+ await p.locator('form .segmented button').filter({hasText:/^Malam$/}).click();
+ await p.clock.fastForward(7*60*60*1000); // pinned historical Malam remains selected
+ assert.ok((await p.locator('.form-heading h2').innerText()).includes('Malam'));
+ await p.locator('.bottom-nav').getByRole('button',{name:/Rekod/}).click();
+ assert.equal(await p.evaluate(()=>window.subscriptions.size),0);
+ assert.deepEqual(errors,[]);await browser.close();console.log('PASS ETD mobile: four sources, realtime after PHC edit, listener lifecycle and automatic shift boundary, error/save/print guard, derived save, week/month/year, widths320-414, no JS error, no production test writes');
 })().catch(e=>{console.error(e);process.exit(1)});

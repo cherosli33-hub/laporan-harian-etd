@@ -1,5 +1,7 @@
 "use client";
 
+import { listenPHCCalls } from "./lib/phcLive";
+import { shiftEngine, shiftLabel } from "./lib/shiftEngine";
 import { usesPHC, reportWithCalls, reportCallsTotal, fieldCalls, callLabels, callsTotal, type CallState } from "./lib/phcCalls";
 import { operationalDateForReport, operationalDateFromTimestamp } from "./lib/operationalDate";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -15,23 +17,9 @@ const labels: Record<StatKey, string> = { merah: "Merah", kuning: "Kuning", hija
 const staffCategories = ["Pegawai Perubatan", "PPP", "Nurse/Jururawat", "PPK", "Pemandu Ambulans"];
 const shiftTimes: Record<Shift, string> = { Pagi: "7:00 pagi – 2:00 petang", Petang: "2:00 petang – 9:00 malam", Malam: "9:00 malam – 7:00 pagi" };
 const todayISO = () => new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kuala_Lumpur" });
-const malaysiaMinutes = () => {
-  const parts = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Kuala_Lumpur", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(new Date());
-  return Number(parts.find((part) => part.type === "hour")?.value || 0) * 60 + Number(parts.find((part) => part.type === "minute")?.value || 0);
-};
-const previousDateISO = (date: string) => {
-  const value = new Date(`${date}T12:00:00+08:00`);
-  value.setDate(value.getDate() - 1);
-  return value.toLocaleDateString("en-CA", { timeZone: "Asia/Kuala_Lumpur" });
-};
-const operationalDateISO = () => operationalDateFromTimestamp(new Date());
-const reportingDateForShift = (shift: Shift) => shift === "Malam" && malaysiaMinutes() < 7 * 60 ? previousDateISO(todayISO()) : todayISO();
-const currentShift = (): Shift => {
-  const minutes = malaysiaMinutes();
-  if (minutes >= 7 * 60 && minutes < 14 * 60) return "Pagi";
-  if (minutes >= 14 * 60 && minutes < 21 * 60) return "Petang";
-  return "Malam";
-};
+const operationalDateISO = () => shiftEngine.getOperationalShift().operationalDate;
+const reportingDateForShift = () => operationalDateISO();
+const currentShift = (): Shift => shiftLabel(shiftEngine.getOperationalShift().shift);
 const formatDate = (date: string, short = false) => new Intl.DateTimeFormat("ms-MY", { day: "numeric", month: short ? "short" : "long", year: "numeric", timeZone: "Asia/Kuala_Lumpur" }).format(new Date(`${date}T12:00:00`));
 const derived = (r: Report) => ({
   merah: r.stats.l1 + r.stats.l2,
@@ -82,6 +70,8 @@ export default function Home() {
   const [previewOnly, setPreviewOnly] = useState(false);
 
   const statsRequest = useRef(0);
+  const [clock, setClock] = useState(() => shiftEngine.getOperationalShift());
+  const [followCurrentShift, setFollowCurrentShift] = useState(false);
   const [callRefresh, setCallRefresh] = useState(0);
   const [formCalls, setFormCalls] = useState<{ key: string; state: CallState } | null>(null);
   const [dailyCalls, setDailyCalls] = useState<{ key: string; state: CallState } | null>(null);
@@ -89,34 +79,41 @@ export default function Home() {
   const callKey = `${callDate}_${draft.shift}`;
   const displayDraft = usesPHC(callDate) ? reportWithCalls(draft, formCalls?.key === callKey ? formCalls.state : { status: "loading" }) : draft;
   const retryCalls = () => { setFormCalls(null); setDailyCalls(null); setCallRefresh(value => value + 1); };
+  // A local boundary timer never reads Firestore. Historical/manual selections stay pinned.
   useEffect(() => {
-    const onFocus = () => { retryCalls(); reportRepository.clearStatisticsCache(); };
-    window.addEventListener("focus", onFocus);
-    return () => window.removeEventListener("focus", onFocus);
-  }, []);
+    let timer:number;
+    const advance=()=>{
+      const next=shiftEngine.getOperationalShift(); setClock(next);
+      if(followCurrentShift && view==="form" && !previewOnly) setDraft(previous=>{
+        const shift=shiftLabel(next.shift); if(previous.date===next.operationalDate && previous.shift===shift)return previous;
+        localReportRepository.saveDraft(withDerived(previous));
+        const id=`${next.operationalDate}_${shift}`;
+        return normalizeReport(localReportRepository.getDraft(id)||reports.find(r=>r.id===id)||emptyReport(next.operationalDate,shift));
+      });
+      timer=window.setTimeout(advance,Math.max(1,shiftEngine.nextBoundary().getTime()-Date.now()+25));
+    };
+    advance(); const resume=()=>{window.clearTimeout(timer);advance();};
+    window.addEventListener("focus",resume);
+    return ()=>{window.clearTimeout(timer);window.removeEventListener("focus",resume);};
+  },[followCurrentShift,view,previewOnly,reports]);
   useEffect(() => {
     if (view !== "form" || !usesPHC(callDate)) return;
-    let current = true;
-    void reportRepository.getCalls(callDate, draft.shift).then(state => { if (current) setFormCalls({ key: callKey, state }); });
-    return () => { current = false; };
+    return listenPHCCalls(callDate,draft.shift,state=>setFormCalls({key:callKey,state}));
   }, [callDate, callKey, draft.shift, view, callRefresh]);
-  // Re-query unique completed entities; never increment counters on refresh.
+  const dashboardDate = clock.operationalDate;
   useEffect(() => {
-    if (view !== "form" && view !== "dashboard") return;
-    const refresh = () => { if (document.visibilityState === "visible" && navigator.onLine) setCallRefresh(value => value + 1); };
-    const timer = window.setInterval(refresh, 30000);
-    const visible = () => { if (document.visibilityState === "visible") retryCalls(); };
-    window.addEventListener("online", visible);
-    document.addEventListener("visibilitychange", visible);
-    return () => { window.clearInterval(timer); window.removeEventListener("online", visible); document.removeEventListener("visibilitychange", visible); };
-  }, [view]);
-  const dashboardDate = operationalDateISO();
-  useEffect(() => {
-    if (view !== "dashboard" || !usesPHC(dashboardDate)) return;
-    let current = true;
-    void reportRepository.getCalls(dashboardDate).then(state => { if (current) setDailyCalls({ key: dashboardDate, state }); });
-    return () => { current = false; };
-  }, [dashboardDate, view, callRefresh]);
+    if(view!=="dashboard"||!usesPHC(dashboardDate))return;
+    // Daily total = three separately scoped shift snapshots. Never listen all history.
+    const states=new Map<Shift,CallState>();
+    const subscriptions=shifts.map(shift=>listenPHCCalls(dashboardDate,shift,state=>{
+      states.set(shift,state);
+      const entries=[...states.values()];
+      const error=entries.find(s=>s.status==='error');
+      const combined:CallState=error?{...error,shift:'Semua syif'}:entries.length===3&&entries.every(s=>s.status==='ready')?{status:'ready',live:true,operationalDate:dashboardDate,shift:'Semua syif',fetchedAt:new Date().toISOString(),calls:entries.reduce((total,s)=>({mecc:total.mecc+s.calls!.mecc,operator:total.operator+s.calls!.operator,awam:total.awam+s.calls!.awam,palsu:total.palsu+s.calls!.palsu}),{mecc:0,operator:0,awam:0,palsu:0})}:{status:'loading',live:true};
+      setDailyCalls({key:dashboardDate,state:combined});
+    }));
+    return ()=>subscriptions.forEach(unsubscribe=>unsubscribe());
+  },[dashboardDate,view,callRefresh]);
 
   useEffect(() => {
     queueMicrotask(() => {
@@ -124,18 +121,24 @@ export default function Home() {
       setReady(true);
     });
     if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => undefined);
-    const today = operationalDateISO();
-    reportRepository.getByDate(today)
+  }, []);
+  useEffect(() => {
+    let active=true;
+    const today = clock.operationalDate;
+    reportRepository.getByDate(today, false)
       .then((serverReports) => {
+        if(!active)return;
         setReports(serverReports);
         setSyncState("online");
       })
       .catch(() => {
+        if(!active)return;
         const cached = reportRepository.cachedReports(today);
         setReports(cached);
         setSyncState("offline");
       });
-  }, []);
+    return ()=>{active=false;};
+  }, [clock.operationalDate]);
 
   useEffect(() => {
     if (!ready || view !== "form" || previewOnly) return;
@@ -148,7 +151,7 @@ export default function Home() {
 
   const suggestionValues = (kind: SuggestionKind) => suggestionStore.values(kind);
   const filledByOptions = suggestionValues("people");
-  const today = operationalDateISO();
+  const today = clock.operationalDate;
   const todaysReports = useMemo(() => reports.filter((r) => r.date === today), [reports, today]);
   const filtered = useMemo(() => recordResults.slice().sort((a, b) => `${b.date}${b.shift}`.localeCompare(`${a.date}${a.shift}`)), [recordResults]);
   const notify = (message: string) => { setToast(message); window.setTimeout(() => setToast(""), 2600); };
@@ -173,9 +176,10 @@ export default function Home() {
       setBusy(false);
     }
   };
-  const startReport = (shift: Shift, date = reportingDateForShift(shift)) => {
-    const existing = reports.find((r) => r.id === `${date}_${shift}`);
+  const startReport = (shift: Shift, date = reportingDateForShift()) => {
+    const existing = reports.find((r) => r.id === `${date}_${shift}`) || recordResults.find((r)=>r.id===`${date}_${shift}`);
     const remembered = localReportRepository.getDraft(`${date}_${shift}`);
+    setFollowCurrentShift(date===shiftEngine.getOperationalShift().operationalDate && shift===currentShift());
     setFormCalls(null);
     setPreviewOnly(false);
     setDraft(normalizeReport(remembered ? structuredClone(remembered) : existing ? structuredClone(existing) : emptyReport(date, shift)));
@@ -313,8 +317,8 @@ export default function Home() {
         {!previewOnly ? <div className="stepper no-print">{steps.map((label, i) => <button type="button" key={label} className={i === step ? "active" : i < step ? "done" : ""} onClick={() => setStep(i)} aria-label={`Langkah ${i + 1}: ${label}`}><span>{i < step ? "✓" : i + 1}</span><small>{label}</small></button>)}</div> : null}
         <section className="form-card">
           {step === 0 && <Step title="Maklumat asas" subtitle="Pilih tarikh, syif dan masukkan nama orang yang mengisi laporan."><div className="field-grid">
-            <Field label="Tarikh laporan"><input type="date" value={draft.date} onChange={(e) => updateDraft({ date: e.target.value, id: `${e.target.value}_${draft.shift}` })} required /></Field>
-            <Field label="Syif"><div className="segmented">{shifts.map((s) => <button type="button" key={s} className={draft.shift === s ? "selected" : ""} onClick={() => updateDraft({ shift: s, id: `${draft.date}_${s}` })}>{s}</button>)}</div></Field>
+            <Field label="Tarikh laporan"><input type="date" value={draft.date} onChange={(e) => { setFollowCurrentShift(false); updateDraft({ date: e.target.value, id: `${e.target.value}_${draft.shift}` }); }} required /></Field>
+            <Field label="Syif"><div className="segmented">{shifts.map((s) => <button type="button" key={s} className={draft.shift === s ? "selected" : ""} onClick={() => { setFollowCurrentShift(draft.date===shiftEngine.getOperationalShift().operationalDate && s===currentShift()); updateDraft({ shift: s, id: `${draft.date}_${s}` }); }}>{s}</button>)}</div></Field>
             <Field label="Nama pengisi" hint="Wajib diisi"><input list="filled-by-suggestions" value={draft.filledBy} onChange={(e) => updateDraft({ filledBy: e.target.value })} placeholder="Contoh: Rosli" autoComplete="off" required /><datalist id="filled-by-suggestions">{filledByOptions.map((name) => <option key={name} value={name} />)}</datalist></Field>
           </div></Step>}
           {step === 1 && <Step title="Kakitangan bertugas" subtitle="Isi mengikut kategori. Nama yang pernah direkod akan muncul sebagai cadangan."><div className="staff-category-list">
@@ -383,8 +387,8 @@ export default function Home() {
 }
 
 function CallStatus({ state, retry }: { state: CallState; retry?: () => void }) {
-  if (state.status === "ready") return <div className="phc-status phc-synced no-print" role="status"><div><strong>✓ Panggilan PHC disahkan dari Firebase</strong><p>{state.operationalDate ? `Tarikh operasi ${state.operationalDate} · ${state.shift || "Semua syif"}. ` : ""}{state.fetchedAt ? `Semakan terakhir ${new Date(state.fetchedAt).toLocaleTimeString("ms-MY", {timeZone:"Asia/Kuala_Lumpur"})}. ` : ""}Borang dan Home disemak semula setiap 30 saat semasa app aktif.</p><small>Rekod PHC yang belum sync pada peranti lain belum boleh dibaca di sini.</small></div>{retry && <button type="button" onClick={retry}>Muat semula PHC</button>}</div>;
-  return <div className="phc-status" role={state.status === "error" ? "alert" : "status"}>{state.status === "loading" ? "Memuatkan panggilan PHC…" : "Data panggilan PHC tidak dapat dimuatkan. Cuba semula."}{retry && <button type="button" onClick={retry}>Cuba semula</button>}</div>;
+  if (state.status === "ready") return <div className="phc-status phc-synced no-print" role="status"><div><strong>{state.live ? "● Live — Firebase" : "✓ Panggilan PHC disahkan dari Firebase"}</strong><p>{state.operationalDate ? `Tarikh operasi ${state.operationalDate} · ${state.shift || "Semua syif"}. ` : ""}{state.fetchedAt ? `Disahkan ${new Date(state.fetchedAt).toLocaleTimeString("ms-MY", {timeZone:"Asia/Kuala_Lumpur"})}. ` : ""}{state.live ? "Kiraan berubah automatik selepas PHC disahkan Firebase." : "Bacaan bagi tempoh dipilih."}</p></div></div>;
+  return <div className="phc-status" role={state.status === "error" ? "alert" : "status"}>{state.status === "loading" ? "Menyambung live Firebase…" : state.message || "⚠ Sync terganggu"}{retry && state.status === "error" && <button type="button" onClick={retry}>Sambung semula</button>}</div>;
 }
 
 function Step({ title, subtitle, children }: { title: string; subtitle: string; children: React.ReactNode }) { return <><div className="card-heading"><div><p className="eyebrow">BORANG LAPORAN</p><h2>{title}</h2><p>{subtitle}</p></div></div><div className="step-content">{children}</div></>; }

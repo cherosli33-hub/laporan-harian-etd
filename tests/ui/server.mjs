@@ -1,0 +1,2 @@
+import {createServer} from 'vite';import react from '@vitejs/plugin-react';import path from 'node:path';
+const server=await createServer({configFile:false,plugins:[{name:'isolated-live-fixture',enforce:'pre',resolveId(id){if(id.endsWith('/lib/phcLive'))return path.resolve('tests/ui/live-fixture.ts');}},react()],server:{host:'127.0.0.1',port:4174},appType:'mpa'});await server.listen();console.log('Test UI ready');

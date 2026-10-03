@@ -1,3 +1,4 @@
+import { shiftEngine } from "./shiftEngine";
 import type { Report } from "./types";
 
 export const ETD_TIME_ZONE = "Asia/Kuala_Lumpur";
@@ -29,10 +30,7 @@ export function nextDateISO(date: string) {
 }
 
 export function operationalDateFromTimestamp(timestamp: string | Date) {
-  const value = timestamp instanceof Date ? timestamp : new Date(timestamp);
-  if (Number.isNaN(value.getTime())) return "";
-  const parts = dateParts(value);
-  return parts.hour < OPERATIONAL_DAY_START_HOUR ? previousDateISO(parts.date) : parts.date;
+  try { return shiftEngine.getOperationalShift(timestamp).operationalDate; } catch { return ""; }
 }
 
 /**

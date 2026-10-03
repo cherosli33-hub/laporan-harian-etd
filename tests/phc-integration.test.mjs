@@ -9,9 +9,11 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 
 const dir = await mkdtemp(path.join(tmpdir(), 'etd-phc-tests-'));
-for (const name of ['types', 'operationalDate', 'phcCalls', 'reportRepository', 'localReportRepository', 'suggestionStore']) {
+for (const name of ['shiftEngine', 'phcLive', 'types', 'operationalDate', 'phcCalls', 'reportRepository', 'localReportRepository', 'suggestionStore']) {
   let code = await readFile(new URL(`../app/lib/${name}.ts`, import.meta.url), 'utf8');
   if (name === 'phcCalls') code = code.replace('PHC_INTEGRATION_START_DATE: string | null = null', 'PHC_INTEGRATION_START_DATE: string | null = "2026-10-03"');
+  code=code.replace("'../shared/operationalShift.js'",JSON.stringify(new URL('../app/shared/operationalShift.js',import.meta.url).href));
+  for(const name of ['firebase/app','firebase/auth','firebase/firestore']) code=code.replaceAll(`from '${name}'`,`from '${import.meta.resolve(name)}'`);
   const js = ts.transpileModule(code, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText.replace(/from (["'])\.\/(\w+)\1/g, 'from "$2.mjs"').replace(/from "(\w+)\.mjs"/g, 'from "./$1.mjs"');
   await writeFile(path.join(dir, `${name}.mjs`), js);
 }
@@ -111,8 +113,8 @@ test('M: actual React print component displays derived values, manual notes and 
   assert.match(html, /MECC \/ Call Centre<\/span><b>2<\/b>/);
   assert.match(html, /Jumlah: 4/); assert.match(html,/Catatan panggilan kekal/);
   const error=renderToStaticMarkup(createElement(ReportPreview,{report:phc.reportWithCalls(base,{status:'error'})}));
-  assert.match(error,/Data panggilan PHC tidak dapat dimuatkan/);assert.match(error,/Jumlah: —/);assert.doesNotMatch(error,/MECC \/ Call Centre<\/span><b>0<\/b>/);
-  const loading=renderToStaticMarkup(createElement(CallStatus,{state:{status:'loading'}}));assert.match(loading,/Memuatkan panggilan PHC/);
+  assert.match(error,/Sync terganggu/);assert.match(error,/Jumlah: —/);assert.doesNotMatch(error,/MECC \/ Call Centre<\/span><b>0<\/b>/);
+  const loading=renderToStaticMarkup(createElement(CallStatus,{state:{status:'loading'}}));assert.match(loading,/Menyambung live Firebase/);
 });
 test('calendar dates reject rollover and cutover remains confirmed',()=>{
   assert.equal(phc.PHC_INTEGRATION_START_DATE,'2026-10-03');
