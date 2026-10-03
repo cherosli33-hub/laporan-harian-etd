@@ -1,4 +1,5 @@
 import { normalizeReport, type Report } from "./types";
+import { PHC_INTEGRATION_START_DATE, PHC_SUMMARY_COLLECTION, derivePHCCalls, usesPHC, reportWithCalls, callsTotal, type PHCSummary, type CallState } from "./phcCalls";
 import { nextDateISO, operationalDateForReport } from "./operationalDate";
 
 const FIREBASE_API_KEY = "AIzaSyCQQ85ceJep54XbkDFun2Zb1dpECcsCAIw";
@@ -10,7 +11,7 @@ const STATS_CACHE_KEY = "etd-laporan-harian:stats-cache:v1";
 
 export type StatsPeriod = "week" | "month" | "year";
 export type StatsTotals = { cases: number; merah: number; kuning: number; hijau: number; l1: number; l2: number; l3: number; l4: number; l5: number; asthma: number; oscc: number; kesBaru: number; kesUlangan: number; ward: number; ambulance: number; calls: number; bid: number; did: number };
-export type RemoteStats = { period: StatsPeriod; start: string; end: string; totals: StatsTotals; groups: Array<{ key: string } & StatsTotals>; reports: Report[]; cacheKey: string };
+export type RemoteStats = { period: StatsPeriod; start: string; end: string; totals: StatsTotals; groups: Array<{ key: string } & StatsTotals>; reports: Report[]; cacheKey: string; callState?: CallState };
 export type RecordPage = { reports: Report[]; nextPageToken: string };
 
 type AuthSession = { idToken: string; refreshToken: string; expiresAt: number };
@@ -23,7 +24,7 @@ function cachedReports(date: string): Report[] {
   if (typeof window === "undefined") return [];
   try {
     const cache = JSON.parse(window.localStorage.getItem(CACHE_KEY) || "null") as { date?: string; reports?: Report[] } | null;
-    return cache?.date === date ? (cache.reports || []).map(normalizeReport) : [];
+    return cache?.date === date ? (cache.reports || []).map(normalizeReport).map((r) => usesPHC(operationalDateForReport(r)) ? reportWithCalls(r, { status: "error", message: "Data panggilan PHC tidak dapat dimuatkan. Cuba semula." }) : r) : [];
   } catch { return []; }
 }
 function loadAuth(): AuthSession | null {
@@ -52,7 +53,7 @@ function baseUrl() { return `https://firestore.googleapis.com/v1/projects/${PROJ
 function queryUrl() { return `https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents:runQuery`; }
 async function firebaseFetch(url: string, init: RequestInit = {}) {
   const auth = await anonymousAuth();
-  const response = await fetch(url, { ...init, headers: { "Content-Type": "application/json", Authorization: `Bearer ${auth.idToken}`, ...(init.headers || {}) } });
+  const response = await fetch(url, { ...init, signal: init.signal || AbortSignal.timeout(15000), headers: { "Content-Type": "application/json", Authorization: `Bearer ${auth.idToken}`, ...(init.headers || {}) } });
   if (!response.ok) { const details = await response.text(); throw new Error(`Firebase tidak dapat dihubungi (${response.status}). ${details.slice(0, 180)}`); }
   return response;
 }
@@ -73,6 +74,42 @@ async function queryRange(start: string, end = start): Promise<Report[]> {
   const response = await firebaseFetch(queryUrl(), { method: "POST", body: JSON.stringify({ structuredQuery: { from: [{ collectionId: COLLECTION }], where, orderBy: [{ field: { fieldPath: "date" }, direction: "DESCENDING" }] } }) });
   const rows = await response.json() as Array<{ document?: FirestoreDocument }>;
   return sortReports(rows.map((row) => docToReport(row.document)).filter((report): report is Report => Boolean(report)));
+}
+
+const PHC_ERROR = "Data panggilan PHC tidak dapat dimuatkan. Cuba semula.";
+async function queryPHC(start: string, end = start, shift?: string): Promise<PHCSummary[]> {
+  const filter = (fieldPath: string, op: string, value: string) => ({ fieldFilter: { field: { fieldPath }, op, value: { stringValue: value } } });
+  const filters = [filter("status", "EQUAL", "completed"), filter("operationalDate", "GREATER_THAN_OR_EQUAL", start), filter("operationalDate", "LESS_THAN_OR_EQUAL", end)];
+  // Wire format follows the current PHC adapter's lowercase shift values.
+  if (shift) filters.push(filter("shift", "EQUAL", shift.toLowerCase()));
+  const response = await firebaseFetch(queryUrl(), { method: "POST", body: JSON.stringify({ structuredQuery: {
+    from: [{ collectionId: PHC_SUMMARY_COLLECTION }],
+    select: { fields: ["phcId", "status", "operationalDate", "shift", "callSource", "deleted", "deletedAt"].map(fieldPath => ({ fieldPath })) },
+    where: { compositeFilter: { op: "AND", filters } },
+    orderBy: [{ field: { fieldPath: "operationalDate" }, direction: "ASCENDING" }],
+  } }) });
+  const data = await response.json() as Array<{ document?: FirestoreDocument }>;
+  if (!Array.isArray(data)) throw new Error(PHC_ERROR);
+  return data.filter(row => row.document).map(({ document }) => {
+    const fields = document!.fields || {};
+    const str = (key: string) => fields[key]?.stringValue || "";
+    const phcId = str("phcId");
+    if (decodeURIComponent(document!.name?.split("/").pop() || "") !== phcId) throw new Error("ID PHC tidak sepadan.");
+    return { phcId, status: str("status"), operationalDate: str("operationalDate"), shift: str("shift"), callSource: str("callSource"), deleted: fields.deleted?.booleanValue, deletedAt: str("deletedAt") };
+  });
+}
+async function phcState(start: string, end = start, shift?: Report["shift"]): Promise<CallState> {
+  try { return { status: "ready", calls: derivePHCCalls(await queryPHC(start, end, shift), start, end, shift) }; }
+  catch { return { status: "error", message: PHC_ERROR }; }
+}
+async function hydrateCalls(reports: Report[]): Promise<Report[]> {
+  const active = reports.filter(r => usesPHC(operationalDateForReport(r)));
+  if (!active.length) return reports;
+  const dates = active.map(operationalDateForReport).sort();
+  try {
+    const rows = await queryPHC(dates[0], dates[dates.length - 1]);
+    return reports.map(r => usesPHC(operationalDateForReport(r)) ? reportWithCalls(r, { status: "ready", calls: derivePHCCalls(rows, operationalDateForReport(r), operationalDateForReport(r), r.shift) }) : r);
+  } catch { return reports.map(r => usesPHC(operationalDateForReport(r)) ? reportWithCalls(r, { status: "error", message: PHC_ERROR }) : r); }
 }
 
 const statisticsMemoryCache = new Map<string, RemoteStats>();
@@ -131,22 +168,36 @@ export function periodRange(period: StatsPeriod, anchor: string) {
 export const reportRepository = {
   apiUrl: `firebase://${PROJECT_ID}/${COLLECTION}`,
   cachedReports,
-  async getByDate(date: string) { const reports = await queryRange(date); cacheReports(date, reports); return reports; },
-  async getRange(start: string, end: string, shift: string = "Semua") { const reports = await queryRange(start, end); return shift === "Semua" ? reports : reports.filter((report) => report.shift === shift); },
+  async getCalls(date: string, shift?: Report["shift"]) { return phcState(date, date, shift); },
+  async getByDate(date: string) { const reports = await hydrateCalls(await queryRange(date)); cacheReports(date, reports); return reports; },
+  async getRange(start: string, end: string, shift: string = "Semua") { const reports = await hydrateCalls(await queryRange(start, end)); return shift === "Semua" ? reports : reports.filter((report) => report.shift === shift); },
   async getPage(pageSize = 10, pageToken = "", shift: string = "Semua"): Promise<RecordPage> {
     const url = new URL(baseUrl()); url.searchParams.set("pageSize", String(pageSize)); url.searchParams.set("orderBy", "date desc"); if (pageToken) url.searchParams.set("pageToken", pageToken);
     const response = await firebaseFetch(url.toString()); const data = await response.json() as { documents?: FirestoreDocument[]; nextPageToken?: string };
-    const reports = sortReports((data.documents || []).map(docToReport).filter((report): report is Report => Boolean(report)));
+    const reports = await hydrateCalls(sortReports((data.documents || []).map(docToReport).filter((report): report is Report => Boolean(report))));
     return { reports: shift === "Semua" ? reports : reports.filter((report) => report.shift === shift), nextPageToken: data.nextPageToken || "" };
   },
   async save(report: Report) {
     const normalized = normalizeReport(report); normalized.ambulances = normalized.ambulances.map((movement) => ({ ...movement, driver: movement.drivers[0] || movement.driver || "" }));
+    delete normalized.callData;
+    if (usesPHC(operationalDateForReport(normalized))) {
+      const state = await phcState(operationalDateForReport(normalized), operationalDateForReport(normalized), normalized.shift);
+      if (state.status !== "ready") throw new Error(PHC_ERROR);
+      normalized.calls = state.calls!;
+      normalized.callsSource = "phc";
+    }
     const id = `${normalized.date}_${normalized.shift}`; const url = `${baseUrl()}/${encodeURIComponent(id)}`; let created = true;
-    try { await firebaseFetch(url); created = false; } catch { created = true; }
+    try {
+      const existing = docToReport(await (await firebaseFetch(url)).json());
+      created = false;
+      if (existing && usesPHC(operationalDateForReport(normalized))) normalized.legacyCalls = existing.legacyCalls || (existing.callsSource !== "phc" ? existing.calls : undefined);
+    } catch (error) {
+      if (!(error instanceof Error) || !error.message.includes("(404)")) throw error;
+    }
     const now = new Date().toISOString(); const saved: Report = { ...normalized, id, createdAt: created ? (normalized.createdAt || now) : normalized.createdAt, updatedAt: now };
     await firebaseFetch(url, { method: "PATCH", body: JSON.stringify({ fields: { date: { stringValue: saved.date }, shift: { stringValue: saved.shift }, reportJson: { stringValue: JSON.stringify(saved) }, deleted: { booleanValue: false }, updatedAt: { stringValue: saved.updatedAt } } }) });
     clearStatisticsCache();
-    return { created, report: saved };
+    return { created, report: usesPHC(operationalDateForReport(saved)) ? reportWithCalls(saved, { status: "ready", calls: saved.calls }) : saved };
   },
   async remove(id: string) {
     const url = `${baseUrl()}/${encodeURIComponent(id)}?updateMask.fieldPaths=deleted&updateMask.fieldPaths=updatedAt`;
@@ -158,7 +209,7 @@ export const reportRepository = {
     const cacheKey = statisticsCacheKey(period, range.start, range.end);
     if (!options.refresh) {
       const cached = readStatisticsCache(cacheKey);
-      if (cached) return cached;
+      if (cached && !usesPHC(range.end)) return cached;
       const pending = statisticsRequests.get(cacheKey);
       if (pending) return pending;
     }
@@ -166,7 +217,7 @@ export const reportRepository = {
       // One query only. The extra calendar day lets legacy pre-07:00 Malam
       // records be normalized and filtered to the correct operational date.
       const queried = await queryRange(range.start, nextDateISO(range.end));
-      const reports = queried.filter((report) => {
+      let reports = queried.filter((report) => {
         const date = operationalDateForReport(report);
         return date >= range.start && date <= range.end;
       });
@@ -179,7 +230,24 @@ export const reportRepository = {
         if (!grouped.has(key)) grouped.set(key, emptyTotals());
         addTotals(grouped.get(key)!, report);
       });
-      const value: RemoteStats = { period, ...range, totals, reports, cacheKey, groups: [...grouped.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => ({ key, ...item })) };
+      let callState: CallState | undefined;
+      if (usesPHC(range.end)) {
+        const start = range.start < PHC_INTEGRATION_START_DATE! ? PHC_INTEGRATION_START_DATE! : range.start;
+        try {
+          const rows = await queryPHC(start, range.end);
+          const calls = derivePHCCalls(rows, start, range.end);
+          totals.calls = reports.filter(r => !usesPHC(operationalDateForReport(r))).reduce((sum, r) => sum + callsTotal(r.calls), 0) + callsTotal(calls);
+          for (const [key, group] of grouped) group.calls = reports.filter(r => !usesPHC(operationalDateForReport(r)) && (period === "year" ? operationalDateForReport(r).slice(0, 7) : operationalDateForReport(r)) === key).reduce((sum, r) => sum + callsTotal(r.calls), 0);
+          for (const row of new Map(rows.filter(r => !r.deleted && !r.deletedAt).map(r => [r.phcId, r])).values()) {
+            const key = period === "year" ? row.operationalDate.slice(0, 7) : row.operationalDate;
+            if (!grouped.has(key)) grouped.set(key, emptyTotals());
+            grouped.get(key)!.calls++;
+          }
+          reports = reports.map(r => usesPHC(operationalDateForReport(r)) ? reportWithCalls(r, { status: "ready", calls: derivePHCCalls(rows, operationalDateForReport(r), operationalDateForReport(r), r.shift) }) : r);
+          callState = { status: "ready", calls };
+        } catch { callState = { status: "error", message: PHC_ERROR }; }
+      }
+      const value: RemoteStats = { period, ...range, totals, reports, cacheKey, callState, groups: [...grouped.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => ({ key, ...item })) };
       writeStatisticsCache(value);
       return value;
     })();

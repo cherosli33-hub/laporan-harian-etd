@@ -1,0 +1,7 @@
+{
+  "indexes": [
+    {"collectionGroup":"phcCallSummaries","queryScope":"COLLECTION","fields":[{"fieldPath":"status","order":"ASCENDING"},{"fieldPath":"operationalDate","order":"ASCENDING"}]},
+    {"collectionGroup":"phcCallSummaries","queryScope":"COLLECTION","fields":[{"fieldPath":"status","order":"ASCENDING"},{"fieldPath":"shift","order":"ASCENDING"},{"fieldPath":"operationalDate","order":"ASCENDING"}]}
+  ],
+  "fieldOverrides": []
+}

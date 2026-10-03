@@ -40,6 +40,7 @@ export function operationalDateFromTimestamp(timestamp: string | Date) {
  * used the calendar date for a Malam entry before 07:00 are corrected locally.
  */
 export function operationalDateForReport(report: Report) {
+  if (report.operationalDate) return report.operationalDate;
   const recordedDate = String(report.date || "").slice(0, 10);
   if (report.shift !== "Malam") return recordedDate || operationalDateFromTimestamp(report.createdAt);
   const timestamp = report.createdAt || report.updatedAt;
