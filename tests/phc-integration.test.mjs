@@ -114,4 +114,11 @@ test('M: actual React print component displays derived values, manual notes and 
   assert.match(error,/Data panggilan PHC tidak dapat dimuatkan/);assert.match(error,/Jumlah: —/);assert.doesNotMatch(error,/MECC \/ Call Centre<\/span><b>0<\/b>/);
   const loading=renderToStaticMarkup(createElement(CallStatus,{state:{status:'loading'}}));assert.match(loading,/Memuatkan panggilan PHC/);
 });
+test('calendar dates reject rollover and cutover remains confirmed',()=>{
+  assert.equal(phc.PHC_INTEGRATION_START_DATE,'2026-10-03');
+  assert.equal(phc.usesPHC('2026-10-02'),false);
+  assert.equal(phc.usesPHC('2026-10-03'),true);
+  assert.throws(()=>phc.derivePHCCalls([row('bad','mecc','pagi','2026-02-30')],'2026-02-01','2026-03-01'),/Tarikh/);
+  assert.equal(phc.callsTotal(phc.derivePHCCalls([row('leap','palsu','pagi','2028-02-29')],'2028-02-01','2028-03-01')),1);
+});
 test.after(async()=>{await rm(dir,{recursive:true,force:true});});

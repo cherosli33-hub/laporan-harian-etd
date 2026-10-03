@@ -37,14 +37,14 @@ async function anonymousAuth(): Promise<AuthSession> {
   if (existing && existing.expiresAt > Date.now() + 60_000) return existing;
   if (existing?.refreshToken) {
     try {
-      const response = await fetch(`https://securetoken.googleapis.com/v1/token?key=${FIREBASE_API_KEY}`, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: existing.refreshToken }) });
+      const response = await fetch(`https://securetoken.googleapis.com/v1/token?key=${FIREBASE_API_KEY}`, { method: "POST", signal: AbortSignal.timeout(15000), headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: existing.refreshToken }) });
       if (response.ok) {
         const data = await response.json() as { id_token: string; refresh_token: string; expires_in: string };
         return saveAuth({ idToken: data.id_token, refreshToken: data.refresh_token, expiresAt: Date.now() + Number(data.expires_in) * 1000 });
       }
     } catch { /* create a fresh anonymous session */ }
   }
-  const response = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${FIREBASE_API_KEY}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ returnSecureToken: true }) });
+  const response = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${FIREBASE_API_KEY}`, { method: "POST", signal: AbortSignal.timeout(15000), headers: { "Content-Type": "application/json" }, body: JSON.stringify({ returnSecureToken: true }) });
   if (!response.ok) throw new Error("Firebase Anonymous Auth tidak dapat dimulakan.");
   const data = await response.json() as { idToken: string; refreshToken: string; expiresIn: string };
   return saveAuth({ idToken: data.idToken, refreshToken: data.refreshToken, expiresAt: Date.now() + Number(data.expiresIn) * 1000 });
