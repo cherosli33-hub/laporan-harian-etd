@@ -45,3 +45,5 @@
 .save-error{margin:18px;padding:16px;background:#fff1ed;border:1px solid #eab5a9;border-radius:12px}
 @media print{.stats-preview,.stats-a4,.a4-sheet{background:#fff!important}.stats-preview{margin:0!important}.stats-a4 .a4-sheet footer{background:#fff!important}}
 @media print{html,body{background:#fff!important;min-height:0!important}.app-shell{min-height:0!important}}
+/* Keep preview actions below the app's sticky header when the report is scrolled. */
+.preview-controls{top:78px;z-index:19}@media(max-width:660px){.preview-controls{top:67px}}

@@ -96,6 +96,7 @@ const assert=require('node:assert/strict');
   await p.pdf({path:`/tmp/etd-a4-${label}.pdf`,format:'A4',preferCSSPageSize:true,printBackground:true});
   await p.setViewportSize({width:390,height:844});
   if(label==='Bulanan')await p.screenshot({path:'/tmp/etd-a4-mobile.png',fullPage:true});
+  await p.locator('.a4-sheet:last-child footer').click();
   await p.getByRole('button',{name:'Kembali',exact:true}).click();assert.equal(phcQueries,beforePreviewQueries,'Preview/return must reuse dataset without Firestore reads');
  }
 
