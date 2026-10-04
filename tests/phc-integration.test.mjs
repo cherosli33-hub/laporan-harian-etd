@@ -9,7 +9,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 
 const dir = await mkdtemp(path.join(tmpdir(), 'etd-phc-tests-'));
-for (const name of ['shiftEngine', 'phcLive', 'types', 'operationalDate', 'phcCalls', 'reportRepository', 'localReportRepository', 'suggestionStore']) {
+for (const name of ['whatsapp', 'shiftEngine', 'phcLive', 'types', 'operationalDate', 'phcCalls', 'reportRepository', 'localReportRepository', 'suggestionStore']) {
   let code = await readFile(new URL(`../app/lib/${name}.ts`, import.meta.url), 'utf8');
   if (name === 'phcCalls') code = code.replace('PHC_INTEGRATION_START_DATE: string | null = null', 'PHC_INTEGRATION_START_DATE: string | null = "2026-10-03"');
   code=code.replace("'../shared/operationalShift.js'",JSON.stringify(new URL('../app/shared/operationalShift.js',import.meta.url).href));

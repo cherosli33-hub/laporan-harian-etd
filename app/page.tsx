@@ -1,5 +1,6 @@
 "use client";
 
+import { generateWhatsAppMessage, buildWhatsAppUrl } from "./lib/whatsapp";
 import { listenPHCCalls } from "./lib/phcLive";
 import { shiftEngine, shiftLabel } from "./lib/shiftEngine";
 import { usesPHC, reportWithCalls, reportCallsTotal, fieldCalls, callLabels, callsTotal, type CallState } from "./lib/phcCalls";
@@ -69,6 +70,9 @@ export default function Home() {
   const [ready, setReady] = useState(false);
   const [previewOnly, setPreviewOnly] = useState(false);
 
+  const [finalSave, setFinalSave] = useState<{report:Report;confirmedAt:string}|null>(null);
+  const [shareStatus, setShareStatus] = useState("");
+  const saveInFlight = useRef(false);
   const statsRequest = useRef(0);
   const [clock, setClock] = useState(() => shiftEngine.getOperationalShift());
   const [followCurrentShift, setFollowCurrentShift] = useState(false);
@@ -156,9 +160,13 @@ export default function Home() {
   const filtered = useMemo(() => recordResults.slice().sort((a, b) => `${b.date}${b.shift}`.localeCompare(`${a.date}${a.shift}`)), [recordResults]);
   const notify = (message: string) => { setToast(message); window.setTimeout(() => setToast(""), 2600); };
   const persist = async (report: Report) => {
+    if(saveInFlight.current) return;
+    saveInFlight.current=true;
+    setFinalSave(null); setShareStatus("");
     setBusy(true);
     try {
       const saved = await reportRepository.save(withDerived({ ...report, updatedAt: new Date().toISOString() }));
+      setFinalSave({report:structuredClone(saved.report),confirmedAt:new Date().toISOString()});
       suggestionStore.remember(saved.report);
       setSuggestionVersion((value) => value + 1);
       localReportRepository.removeDraft(report.id);
@@ -171,12 +179,14 @@ export default function Home() {
       setStep(0);
     } catch (error) {
       setSyncState("offline");
-      notify(error instanceof Error ? error.message : "Laporan tidak dapat disimpan.");
+      notify(`⚠ Gagal menyimpan laporan: ${error instanceof Error ? error.message : "Cuba semula."}`);
     } finally {
+      saveInFlight.current=false;
       setBusy(false);
     }
   };
   const startReport = (shift: Shift, date = reportingDateForShift()) => {
+    setFinalSave(null); setShareStatus("");
     const existing = reports.find((r) => r.id === `${date}_${shift}`) || recordResults.find((r)=>r.id===`${date}_${shift}`);
     const remembered = localReportRepository.getDraft(`${date}_${shift}`);
     setFollowCurrentShift(date===shiftEngine.getOperationalShift().operationalDate && shift===currentShift());
@@ -255,6 +265,18 @@ export default function Home() {
     const cancelRequest = () => { statsRequest.current++; };
     return () => { window.clearTimeout(timer); cancelRequest(); };
   }, [loadStats, ready, view, callRefresh]);
+  const shareMessage = finalSave ? generateWhatsAppMessage(finalSave.report, finalSave.confirmedAt) : "";
+  const openWhatsApp = () => {
+    if (!finalSave) return;
+    const opened = window.open(buildWhatsAppUrl(shareMessage), "_blank");
+    if (opened) { opened.opener=null; setShareStatus("Mesej WhatsApp disediakan. Pilih penerima/group dan tekan Send dalam WhatsApp."); }
+    else setShareStatus("WhatsApp tidak dapat dibuka. Gunakan Copy Message di bawah.");
+  };
+  const copyMessage = async () => {
+    if (!finalSave) return;
+    try { await navigator.clipboard.writeText(shareMessage); setShareStatus("✓ Mesej disalin"); }
+    catch { setShareStatus("Clipboard tidak tersedia. Pilih dan salin mesej di bawah."); }
+  };
   const printReport = (report: Report) => { setFormCalls(null); setPreviewOnly(true); setDraft(structuredClone(report)); setStep(7); setView("form"); window.scrollTo({ top: 0, behavior: "smooth" }); };
   const dayTotals = summarize(todaysReports);
   const dayCallState = dailyCalls?.key === today ? dailyCalls.state : { status: "loading" } as CallState;
@@ -267,6 +289,13 @@ export default function Home() {
         <div className="brand"><img className="brand-logo" src="/etd-logo.jpg" alt="Logo Jabatan Kecemasan dan Trauma Hospital Kuala Lipis" /><div><p className="eyebrow">E.T.D HOSPITAL KUALA LIPIS</p><h1>Laporan Harian ETD</h1></div></div>
         <span className={`sync-badge ${syncState}`}><i />{syncState === "online" ? "✓ Laporan ETD: Firebase disahkan" : syncState === "loading" ? "Menyambung…" : "Draf luar talian"}</span>
       </header>
+      {finalSave && <section className="final-save-card no-print" aria-label="Final Save berjaya">
+        <h2>✓ Laporan berjaya disimpan</h2>
+        <p>Tarikh Operasi: {formatDate(operationalDateForReport(finalSave.report))}<br />Shift: {finalSave.report.shift}<br />Masa Save: {new Date(finalSave.confirmedAt).toLocaleTimeString("ms-MY",{timeZone:"Asia/Kuala_Lumpur"})}</p>
+        <div className="final-save-actions"><button type="button" className="whatsapp-btn" onClick={openWhatsApp}>Hantar WhatsApp</button><button type="button" className="secondary" onClick={()=>void copyMessage()}>Copy Message</button></div>
+        <p className="share-status" role="status">{shareStatus || "Laporan sudah disahkan Firebase. Perkongsian WhatsApp adalah pilihan."}</p>
+        <details><summary>Lihat mesej / salin manual</summary><textarea readOnly aria-label="Mesej WhatsApp" value={shareMessage} rows={16} /></details>
+      </section>}
       {!ready ? <div className="loading">Menyiapkan ruang laporan…</div> : null}
 
       {ready && view === "dashboard" && <div className="page page-dashboard">

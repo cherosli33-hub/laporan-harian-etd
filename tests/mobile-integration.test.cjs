@@ -5,7 +5,7 @@ const assert=require('node:assert/strict');
  const context=await browser.newContext({viewport:{width:390,height:844},isMobile:true,hasTouch:true,timezoneId:'Asia/Kuala_Lumpur',serviceWorkers:'block'});
  const p=await context.newPage(),errors=[];p.on('pageerror',e=>errors.push(e.message));
  const rows=[['1','mecc'],['2','mecc'],['3','awam'],['4','operator'],['5','palsu']].map(([phcId,callSource])=>({phcId,callSource,status:'completed',operationalDate:'2026-10-03',shift:'pagi',deleted:false}));
- let fail=false,reports=[],saved=[];
+ let fail=false,failWrite=false,reports=[],saved=[];
  const document=r=>({name:'projects/amo-dashboard-v2/databases/(default)/documents/phcCallSummaries/'+r.phcId,fields:Object.fromEntries(Object.entries(r).map(([k,v])=>[k,typeof v==='boolean'?{booleanValue:v}:{stringValue:v}]))});
  // Every external request is intercepted. No test records reach production.
  await p.route('**/*',async route=>{
@@ -23,7 +23,7 @@ const assert=require('node:assert/strict');
     }
     return route.fulfill({json:reports.map(r=>({document:{fields:{reportJson:{stringValue:JSON.stringify(r)}}}}))});
    }
-   if(req.method()==='PATCH'){const fields=req.postDataJSON().fields;saved.push(JSON.parse(fields.reportJson.stringValue));reports=[...saved];return route.fulfill({json:{}})}
+   if(req.method()==='PATCH'){if(failWrite)return route.fulfill({status:503,body:'save failure test'});const fields=req.postDataJSON().fields;saved.push(JSON.parse(fields.reportJson.stringValue));reports=[...saved];return route.fulfill({json:{}})}
    if(url.includes('?'))return route.fulfill({json:{documents:reports.map(r=>({fields:{reportJson:{stringValue:JSON.stringify(r)}}}))}});
    return route.fulfill({status:404,body:'not found'});
   }
@@ -31,7 +31,7 @@ const assert=require('node:assert/strict');
  });
  const target=process.env.ETD_TEST_URL||'http://127.0.0.1:4174/tests/ui/index.html';
  for(let n=0;n<40;n++){try{if((await fetch(target)).ok)break}catch{}await new Promise(resolve=>setTimeout(resolve,250))}
- await p.clock.install({time:new Date('2026-10-04T08:00:00+08:00')});await p.goto(target);await p.evaluate(rows=>{window.liveRows=rows;window.emitLive();},rows);
+ await p.clock.install({time:new Date('2026-10-04T08:00:00+08:00')});await p.goto(target);await p.waitForFunction(()=>typeof window.emitLive==='function');await p.evaluate(rows=>{window.liveRows=rows;window.emitLive();},rows);
  await p.locator('.page-dashboard').waitFor();
  await p.locator('.bottom-nav').getByRole('button',{name:/Isi laporan/}).click();
  await p.locator('form.form-page').waitFor();
@@ -56,9 +56,23 @@ const assert=require('node:assert/strict');
  await p.waitForFunction(()=>document.querySelector('output[aria-label="Awam"]')?.textContent==='2');
  await p.getByRole('button',{name:'Langkah 8: Semakan',exact:true}).click();
  assert.ok((await p.locator('.report-preview').innerText()).includes('Jumlah: 5'));
- await p.getByRole('button',{name:'Simpan ke Firebase',exact:true}).click();
+ failWrite=true;await p.getByRole('button',{name:'Simpan ke Firebase',exact:true}).click();
+ await p.getByText(/Gagal menyimpan laporan/).waitFor();assert.equal(await p.getByRole('button',{name:'Hantar WhatsApp',exact:true}).count(),0);assert.equal(saved.length,0);
+ failWrite=false;await p.getByRole('button',{name:'Simpan ke Firebase',exact:true}).click();
  await p.waitForFunction(()=>document.querySelector('.page-dashboard'));
  assert.equal(saved.length,1);assert.equal(saved[0].calls.awam,2);assert.equal(saved[0].callsSource,'phc');
+ await p.getByRole('heading',{name:'✓ Laporan berjaya disimpan'}).waitFor();
+ await p.evaluate(()=>{window.shareUrls=[];window.open=url=>{window.shareUrls.push(url);return {opener:null}};Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async text=>{window.copiedMessage=text}}});});
+ const msg=await p.getByLabel('Mesej WhatsApp',{exact:true}).inputValue();
+ assert.ok(msg.includes('Jumlah Panggilan Kecemasan: 5'));assert.ok(msg.includes('MECC / Call Centre: 1'));assert.ok(msg.includes('Awam: 2'));
+ for(let i=0;i<2;i++)await p.getByRole('button',{name:'Hantar WhatsApp',exact:true}).click();
+ const urls=await p.evaluate(()=>window.shareUrls);assert.equal(urls.length,2);assert.equal(new URL(urls[0]).searchParams.get('text'),msg);assert.equal(saved.length,1,'Sharing must not write Firestore');
+ await p.getByRole('button',{name:'Copy Message',exact:true}).click();assert.equal(await p.evaluate(()=>window.copiedMessage),msg);assert.ok(await p.getByText('✓ Mesej disalin',{exact:true}).isVisible());
+ for(const width of [320,375,390,414,1280]){await p.setViewportSize({width,height:844});assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,'success overflow '+width)}
+ await p.setViewportSize({width:390,height:844});
+ await p.screenshot({path:process.env.ETD_SUCCESS_SCREENSHOT||'/tmp/etd-whatsapp-mobile-test.png',fullPage:false});
+ await p.evaluate(()=>{window.open=()=>null});await p.getByRole('button',{name:'Hantar WhatsApp',exact:true}).click();assert.ok(await p.getByText('WhatsApp tidak dapat dibuka. Gunakan Copy Message di bawah.',{exact:true}).isVisible());assert.equal(saved.length,1);
+
  await p.locator('.bottom-nav').getByRole('button',{name:/Statistik/}).click();
  for(const label of ['Mingguan','Bulanan','Tahunan']){await p.getByRole('button',{name:label,exact:true}).click();await p.waitForFunction(()=>Array.from(document.querySelectorAll('h3')).some(h=>h.textContent==='Panggilan kecemasan'&&h.parentElement.querySelector('strong')?.textContent==='5'));}
  for(const width of [320,375,390,414]){await p.setViewportSize({width,height:844});assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,'overflow '+width)}
