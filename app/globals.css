@@ -44,3 +44,4 @@
 @media print{.stats-a4{line-height:1.2}.a4-header{padding-bottom:8px}.a4-header h1{font-size:17pt;margin:5px 0}.a4-header h2{font-size:13pt;margin:5px 0}.a4-header p{font-size:9pt;margin:4px 0}.a4-kpis{margin:10px 0}.a4-kpis>div{padding:9px}.stats-a4 th,.stats-a4 td{font-size:9pt;line-height:1.2;padding:3px 6px}.stats-a4 .a4-trend-table th,.stats-a4 .a4-trend-table td{font-size:8.5pt;line-height:1.1;padding:2px 5px}.stats-a4 h3{margin:10px 0 6px}.stats-a4 .a4-chart{height:28mm}.stats-a4 .call-breakdown dd{font-size:15pt}.stats-a4 .a4-note{line-height:1.3;margin:8px 0}}
 .save-error{margin:18px;padding:16px;background:#fff1ed;border:1px solid #eab5a9;border-radius:12px}
 @media print{.stats-preview,.stats-a4,.a4-sheet{background:#fff!important}.stats-preview{margin:0!important}.stats-a4 .a4-sheet footer{background:#fff!important}}
+@media print{html,body{background:#fff!important;min-height:0!important}.app-shell{min-height:0!important}}
