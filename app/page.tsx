@@ -1,5 +1,7 @@
 "use client";
 
+import { StatsA4 } from "./components/StatsA4";
+import { CallBreakdown } from "./components/CallBreakdown";
 import { generateWhatsAppMessage, buildWhatsAppUrl } from "./lib/whatsapp";
 import { listenPHCCalls } from "./lib/phcLive";
 import { shiftEngine, shiftLabel } from "./lib/shiftEngine";
@@ -11,7 +13,7 @@ import { localReportRepository } from "./lib/localReportRepository";
 import { RemoteStats, StatsPeriod, StatsTotals, periodRange, reportRepository } from "./lib/reportRepository";
 import { suggestionStore, type SuggestionKind } from "./lib/suggestionStore";
 
-type View = "dashboard" | "form" | "records" | "stats";
+type View = "dashboard" | "form" | "records" | "stats" | "stats-preview";
 const shifts: Shift[] = ["Pagi", "Petang", "Malam"];
 const steps = ["Maklumat asas", "Kakitangan", "Statistik kes", "Carry forward", "Laporan kes", "Ambulans & Kenderaan", "Panggilan", "Semakan"];
 const labels: Record<StatKey, string> = { merah: "Merah", kuning: "Kuning", hijau: "Hijau", l1: "L1", l2: "L2", l3: "L3", l4: "L4", l5: "L5", asthmaBay: "Asthma Bay", oscc: "OSCC", kesBaru: "Kes Baru", kesUlangan: "Kes Ulangan", masukWad: "Masuk Wad" };
@@ -73,6 +75,10 @@ export default function Home() {
   const [finalSave, setFinalSave] = useState<{report:Report;confirmedAt:string}|null>(null);
   const [shareStatus, setShareStatus] = useState("");
   const saveInFlight = useRef(false);
+  const successDialog = useRef<HTMLDialogElement>(null);
+  const returningFromStatsPreview = useRef(false);
+  const [saveError, setSaveError] = useState("");
+  useEffect(() => { if (finalSave && !successDialog.current?.open) successDialog.current?.showModal(); }, [finalSave]);
   const statsRequest = useRef(0);
   const [clock, setClock] = useState(() => shiftEngine.getOperationalShift());
   const [followCurrentShift, setFollowCurrentShift] = useState(false);
@@ -162,7 +168,7 @@ export default function Home() {
   const persist = async (report: Report) => {
     if(saveInFlight.current) return;
     saveInFlight.current=true;
-    setFinalSave(null); setShareStatus("");
+    setFinalSave(null); setShareStatus(""); setSaveError("");
     setBusy(true);
     try {
       const saved = await reportRepository.save(withDerived({ ...report, updatedAt: new Date().toISOString() }));
@@ -179,14 +185,15 @@ export default function Home() {
       setStep(0);
     } catch (error) {
       setSyncState("offline");
-      notify(`⚠ Gagal menyimpan laporan: ${error instanceof Error ? error.message : "Cuba semula."}`);
+      setSaveError(`Laporan gagal disimpan. WhatsApp tidak dibuka. ${error instanceof Error ? error.message : "Cuba semula."}`);
+      notify("Gagal menyimpan laporan. Cuba semula.");
     } finally {
       saveInFlight.current=false;
       setBusy(false);
     }
   };
   const startReport = (shift: Shift, date = reportingDateForShift()) => {
-    setFinalSave(null); setShareStatus("");
+    setFinalSave(null); setShareStatus(""); setSaveError("");
     const existing = reports.find((r) => r.id === `${date}_${shift}`) || recordResults.find((r)=>r.id===`${date}_${shift}`);
     const remembered = localReportRepository.getDraft(`${date}_${shift}`);
     setFollowCurrentShift(date===shiftEngine.getOperationalShift().operationalDate && shift===currentShift());
@@ -261,6 +268,7 @@ export default function Home() {
   }, [statsAnchor, statsPeriod]);
   useEffect(() => {
     if (!ready || view !== "stats") return;
+    if(returningFromStatsPreview.current){returningFromStatsPreview.current=false; return;}
     const timer = window.setTimeout(() => void loadStats(), 0);
     const cancelRequest = () => { statsRequest.current++; };
     return () => { window.clearTimeout(timer); cancelRequest(); };
@@ -289,13 +297,14 @@ export default function Home() {
         <div className="brand"><img className="brand-logo" src="/etd-logo.jpg" alt="Logo Jabatan Kecemasan dan Trauma Hospital Kuala Lipis" /><div><p className="eyebrow">E.T.D HOSPITAL KUALA LIPIS</p><h1>Laporan Harian ETD</h1></div></div>
         <span className={`sync-badge ${syncState}`}><i />{syncState === "online" ? "✓ Laporan ETD: Firebase disahkan" : syncState === "loading" ? "Menyambung…" : "Draf luar talian"}</span>
       </header>
-      {finalSave && <section className="final-save-card no-print" aria-label="Final Save berjaya">
+      {finalSave && <dialog ref={successDialog} className="final-save-card no-print" aria-label="Final Save berjaya" onClose={() => setFinalSave(null)}>
         <h2>✓ Laporan berjaya disimpan</h2>
         <p>Tarikh Operasi: {formatDate(operationalDateForReport(finalSave.report))}<br />Shift: {finalSave.report.shift}<br />Masa Save: {new Date(finalSave.confirmedAt).toLocaleTimeString("ms-MY",{timeZone:"Asia/Kuala_Lumpur"})}</p>
-        <div className="final-save-actions"><button type="button" className="whatsapp-btn" onClick={openWhatsApp}>Hantar WhatsApp</button><button type="button" className="secondary" onClick={()=>void copyMessage()}>Copy Message</button></div>
+        <div className="final-save-actions"><button autoFocus type="button" className="whatsapp-btn" onClick={openWhatsApp}>Hantar WhatsApp</button><button type="button" className="secondary" onClick={()=>void copyMessage()}>Copy Message</button></div>
+        <button type="button" className="secondary dialog-close" onClick={() => successDialog.current?.close()}>Tutup</button>
         <p className="share-status" role="status">{shareStatus || "Laporan sudah disahkan Firebase. Perkongsian WhatsApp adalah pilihan."}</p>
         <details><summary>Lihat mesej / salin manual</summary><textarea readOnly aria-label="Mesej WhatsApp" value={shareMessage} rows={16} /></details>
-      </section>}
+      </dialog>}
       {!ready ? <div className="loading">Menyiapkan ruang laporan…</div> : null}
 
       {ready && view === "dashboard" && <div className="page page-dashboard">
@@ -338,9 +347,11 @@ export default function Home() {
           </div>
           <div className="metric-grid dashboard-metrics"><Metric label="Jumlah kes" value={dayTotals.cases} accent="emerald" icon="✚" /><Metric label="Kes merah" value={dayTotals.merah} accent="red" icon="●" /><Metric label="Kes kuning" value={dayTotals.kuning} accent="yellow" icon="●" /><Metric label="Kes hijau" value={dayTotals.hijau} accent="green" icon="●" /><Metric label="Asthma Bay" value={dayTotals.asthma} accent="purple" icon="◌" /><Metric label="OSCC" value={dayTotals.oscc} accent="pink" icon="◇" /><Metric label="Masuk wad" value={dayTotals.ward} accent="blue" icon="▣" /><Metric label="Ambulans" value={dayTotals.ambulance} accent="orange" icon="➜" /></div>
         </section>
+        <section className="level-card daily-call-breakdown"><h2>Panggilan kecemasan</h2><p>{formatDate(today)} · Semua syif</p><CallBreakdown calls={usesPHC(today) ? dayCallState.status === "ready" ? dayCallState.calls : undefined : todaysReports.reduce((sum, r) => ({mecc:sum.mecc+r.calls.mecc,operator:sum.operator+r.calls.operator,awam:sum.awam+r.calls.awam,palsu:sum.palsu+r.calls.palsu}), {mecc:0,operator:0,awam:0,palsu:0})} />{usesPHC(today) && <CallStatus state={dayCallState} retry={retryCalls} />}</section>
         <section className="quick-strip"><div><span>Jumlah panggilan kecemasan</span><strong>{dayCallTotal ?? "—"}</strong>{usesPHC(today) && <CallStatus state={dayCallState} retry={retryCalls} />}</div><div><span>BID / DID</span><strong>{dayTotals.bid} / {dayTotals.did}</strong></div><button onClick={() => setView("stats")}>Lihat statistik <span>→</span></button></section>
       </div>}
 
+      {ready && view === "form" && saveError && <div className="save-error no-print" role="alert"><p>{saveError}</p><button className="primary" disabled={busy} onClick={()=>void persist(displayDraft)}>Cuba simpan semula</button></div>}
       {ready && view === "form" && <form className="page form-page" onSubmit={submit}>
         <div className="form-heading no-print"><button type="button" className="back-btn" onClick={() => previewOnly ? leaveForm("records") : leaveForm("dashboard")}>←</button><div><p className="eyebrow">{previewOnly ? "PRATONTON CETAKAN" : reports.some((r) => r.id === draft.id) ? "KEMAS KINI LAPORAN" : "DRAF DISIMPAN AUTOMATIK"}</p><h2>{draft.shift} · {formatDate(draft.date, true)}</h2><small className="form-shift-time">{shiftTimes[draft.shift]}</small></div><span className="step-number">{previewOnly ? "Pratonton A4" : `${step + 1}/${steps.length}`}</span></div>
         {!previewOnly ? <div className="stepper no-print">{steps.map((label, i) => <button type="button" key={label} className={i === step ? "active" : i < step ? "done" : ""} onClick={() => setStep(i)} aria-label={`Langkah ${i + 1}: ${label}`}><span>{i < step ? "✓" : i + 1}</span><small>{label}</small></button>)}</div> : null}
@@ -400,16 +411,18 @@ export default function Home() {
       </div>}
 
       {ready && view === "stats" && <div className="page stats-page"><section className="hero stats-hero"><div><p className="eyebrow">ANALISIS ETD</p><h2>Statistik ETD</h2><p className="muted">Satu bacaan bagi setiap tempoh; kad, graf dan jadual berkongsi dataset yang sama.</p></div><button className="secondary stats-refresh" disabled={busy} onClick={() => void loadStats(true)}>{busy ? "Memuat…" : "↻ Refresh"}</button></section>
+        <button className="primary no-print" disabled={busy || !remoteStats || remoteStats.callState?.status !== "ready"} onClick={() => {setView("stats-preview"); window.scrollTo(0,0);}}>Preview Laporan A4</button>
         <PeriodNavigator period={statsPeriod} anchor={statsAnchor} today={today} onPeriod={(value) => { setStatsPeriod(value); setRemoteStats(null); }} onAnchor={(value) => { setStatsAnchor(value); setRemoteStats(null); }} />
         <div className="stats-summary-grid"><Metric label="Jumlah Pesakit" value={busy && !remoteStats ? "…" : periodTotals.cases} accent="emerald" icon="✚" /><Metric label="Purata / Hari" value={averagePerDay(periodTotals.cases, remoteStats?.start, remoteStats?.end)} accent="blue" icon="÷" /><Metric label="Asthma" value={periodTotals.asthma} accent="purple" icon="◌" /></div>
         <section className="level-card"><div className="section-heading"><div><p className="eyebrow">SENSUS L1 – L5</p><h2>Tahap kes</h2></div></div><LevelBarChart totals={periodTotals} /></section>
         <section className="stats-section"><div className="section-heading"><div><p className="eyebrow">MENGIKUT ZON</p><h2>Pecahan pesakit</h2></div></div><div className="zone-stat-grid">{[["Red Zone", periodTotals.merah, "red"], ["Yellow Zone", periodTotals.kuning, "yellow"], ["Green Zone", periodTotals.hijau, "green"]].map(([name, value, tone]) => <article className={`zone-stat zone-stat-${tone}`} key={name}><span>{name}</span><strong>{value}</strong><small>{percentage(Number(value), periodTotals.cases)}% daripada keseluruhan</small></article>)}</div></section>
         <section className="level-card chart-card"><div className="section-heading"><div><p className="eyebrow">TREND PESAKIT</p><h2>{statsPeriod === "week" ? "Mengikut hari" : statsPeriod === "month" ? "Mengikut tarikh" : "Mengikut bulan"}</h2></div></div><TrendChart groups={completeTrendGroups(remoteStats)} /></section>
         <section className="level-card detail-card"><div className="section-heading"><div><p className="eyebrow">PECAHAN TERPERINCI</p><h2>Ringkasan kategori</h2></div></div><DetailTable totals={periodTotals} />
-        {usesPHC(periodRange(statsPeriod, statsAnchor).end) && <section className="level-card"><h3>Panggilan kecemasan</h3><strong>{remoteStats?.callState?.status === "ready" ? periodTotals.calls : "—"}</strong><CallStatus state={remoteStats?.callState || { status: busy ? "loading" : "error" }} retry={() => void loadStats(true)} /></section>}</section>
+        <section className="level-card"><h3>Panggilan kecemasan</h3><CallBreakdown calls={remoteStats?.callState?.status === "ready" ? remoteStats.callState.calls : undefined} /><CallStatus state={remoteStats?.callState || { status: busy ? "loading" : "error" }} retry={() => void loadStats(true)} /></section></section>
       </div>}
 
-      <nav className="bottom-nav no-print" aria-label="Navigasi utama"><NavButton active={view === "dashboard"} icon="⌂" label="Utama" onClick={() => leaveForm("dashboard")} /><NavButton active={view === "form" && !previewOnly} icon="+" label="Isi laporan" onClick={() => startReport(currentShift())} prominent /><NavButton active={view === "records" || previewOnly} icon="▤" label="Rekod" onClick={() => leaveForm("records")} /><NavButton active={view === "stats"} icon="▥" label="Statistik" onClick={() => leaveForm("stats")} /></nav>
+      {view === "stats-preview" && remoteStats && <div className="page stats-preview"><div className="preview-controls no-print"><button className="primary" onClick={() => window.print()}>Cetak / Save PDF</button><button className="secondary" onClick={() => {returningFromStatsPreview.current=true;setView("stats");}}>Kembali</button></div><StatsA4 stats={remoteStats} groups={completeTrendGroups(remoteStats)} /></div>}
+      <nav className="bottom-nav no-print" aria-label="Navigasi utama"><NavButton active={view === "dashboard"} icon="⌂" label="Utama" onClick={() => leaveForm("dashboard")} /><NavButton active={view === "form" && !previewOnly} icon="+" label="Isi laporan" onClick={() => startReport(currentShift())} prominent /><NavButton active={view === "records" || previewOnly} icon="▤" label="Rekod" onClick={() => leaveForm("records")} /><NavButton active={view === "stats" || view === "stats-preview"} icon="▥" label="Statistik" onClick={() => leaveForm("stats")} /></nav>
       {toast ? <div className="toast no-print">✓ {toast}</div> : null}
     </main>
   );

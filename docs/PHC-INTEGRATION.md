@@ -101,3 +101,42 @@ prepare PHC test rules, and run `firebase emulators:exec` using PHC firebase.tes
 with `node --test ../etd-integration/tests/realtime.test.mjs`.
 The mobile test-only Vite fixture replaces the listener at module resolution;
 none of that fixture is imported into production.
+
+## ETD dashboard, confirmed share dialog and statistics A4 (4 October 2026)
+
+Only the ETD app is changed. PHC remains a separate producer/deployment.
+Dashboard emergency calls show the total and four categories for the current
+operational date, across three scoped shift listeners. Counts use the existing
+canonical PHC reducer and unique PHC IDs, not counter increments.
+
+Statistics combine historical manual calls before the existing 2026-10-03
+cutover with completed PHC summaries on/after that date. The category breakdown,
+period total and per-day/month trend now use the same validated reducer. Original
+historical reports are never rewritten by reading statistics. Statistics cache
+version is bumped to avoid reusing old cached breakdowns.
+
+Final Save awaits the existing repository's confirmed Firestore PATCH. Success
+opens a native modal dialog centered in the current viewport with WhatsApp,
+Copy Message and Close actions. Failure leaves the form available and shows an
+explicit error/retry action. Sharing never writes Firestore; recipient selection
+and Send remain WhatsApp user actions. The message also includes filledBy,
+BID/DID and vehicle movement count from the saved report snapshot.
+
+StatsA4 renders the already-loaded RemoteStats dataset. Preview/return/print
+perform no extra queries. Two A4 portrait pages include period and all-shift
+scope, patient/zone/level/operation metrics, four-source emergency breakdown,
+and day/month trend table. Browser Print / Save PDF uses the same preview.
+
+No rules, clinical collection permissions, PHC fields or indexes are changed.
+Existing status+operationalDate and status+shift+operationalDate summary indexes
+remain sufficient. Date-range reads only occur when a statistics period is
+requested or explicitly refreshed. No PHC polling is introduced.
+
+Verification: 14 model/repository/WhatsApp test groups plus the isolated real UI
+suite verify mixed historical+PHC counts, edit/dedup, excluded statuses, shifts,
+failed/successful final save, viewport-visible dialog, two share clicks with one
+save, clipboard fallback, dashboard category sum, three A4 periods and no extra
+preview queries. UI tests intercept all external writes; no test patients or
+reports are written to production. PDF visual inspection verifies two A4 pages
+for each period. Native WhatsApp app launch and physical iPhone/Safari behaviour
+must be distinguished from tested deep-link/message and Chromium mobile layout.

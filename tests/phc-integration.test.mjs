@@ -17,9 +17,16 @@ for (const name of ['whatsapp', 'shiftEngine', 'phcLive', 'types', 'operationalD
   const js = ts.transpileModule(code, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText.replace(/from (["'])\.\/(\w+)\1/g, 'from "$2.mjs"').replace(/from "(\w+)\.mjs"/g, 'from "./$1.mjs"');
   await writeFile(path.join(dir, `${name}.mjs`), js);
 }
+for (const name of ['CallBreakdown', 'StatsA4']) {
+  const source = await readFile(new URL(`../app/components/${name}.tsx`, import.meta.url), 'utf8');
+  let js=ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.ESNext,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX}}).outputText.replace(/from (["'])\.\.\/lib\/(\w+)\1/g,'from "./$2.mjs"').replace(/from (["'])\.\/CallBreakdown\1/g, 'from "./CallBreakdown.mjs"');
+  js=js.replace('from "react/jsx-runtime"',`from "${import.meta.resolve('react/jsx-runtime')}"`);
+  await writeFile(path.join(dir,`${name}.mjs`),js);
+}
 let pageSource = await readFile(new URL('../app/page.tsx', import.meta.url), 'utf8');
 pageSource += '\nexport { ReportPreview, CallStatus };';
 let pageJS = ts.transpileModule(pageSource, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX } }).outputText;
+pageJS = pageJS.replace(/from (["'])\.\/components\/(\w+)\1/g, 'from "./$2.mjs"');
 pageJS = pageJS.replace(/from (["'])\.\/lib\/(\w+)\1/g, 'from "./$2.mjs"');
 for (const name of ['react', 'react/jsx-runtime']) pageJS = pageJS.replaceAll(`from "${name}"`, `from "${import.meta.resolve(name)}"`);
 await writeFile(path.join(dir, 'page.mjs'), pageJS);
@@ -97,7 +104,7 @@ test('K/L/M: form, daily dashboard and week/month/year statistics agree, includi
 });
 test('L: mixed historical boundary and fresh PHC edits bypass statistics cache',async()=>{
   const old=emptyReport('2026-10-02','Pagi');old.calls.mecc=7; etd=[old,emptyReport('2026-10-03','Pagi')];rows=[row('1')];
-  assert.equal((await reportRepository.getStats('month','2026-10-03')).totals.calls,8);
+  const mixed=await reportRepository.getStats('month','2026-10-03'); assert.equal(mixed.totals.calls,8);assert.equal(mixed.callState.calls.mecc,8);assert.equal(phc.callsTotal(mixed.callState.calls),mixed.totals.calls);
   rows=[]; assert.equal((await reportRepository.getStats('month','2026-10-03')).totals.calls,7);
   fail=true;assert.equal((await reportRepository.getStats('month','2026-10-03')).callState.status,'error');fail=false;
 });

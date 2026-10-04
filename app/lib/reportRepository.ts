@@ -1,5 +1,5 @@
 import { normalizeReport, type Report } from "./types";
-import { PHC_INTEGRATION_START_DATE, PHC_SUMMARY_COLLECTION, derivePHCCalls, usesPHC, reportWithCalls, callsTotal, type PHCSummary, type CallState } from "./phcCalls";
+import { PHC_INTEGRATION_START_DATE, PHC_SUMMARY_COLLECTION, derivePHCCalls, usesPHC, reportWithCalls, callsTotal, emptyCalls, type PHCSummary, type CallState } from "./phcCalls";
 import { nextDateISO, operationalDateForReport } from "./operationalDate";
 
 const FIREBASE_API_KEY = "AIzaSyCQQ85ceJep54XbkDFun2Zb1dpECcsCAIw";
@@ -7,7 +7,7 @@ const PROJECT_ID = "amo-dashboard-v2";
 const COLLECTION = "daily_reports";
 const CACHE_KEY = "etd-laporan-harian:today-cache:v3";
 const AUTH_KEY = "etd-laporan-harian:firebase-auth:v2";
-const STATS_CACHE_KEY = "etd-laporan-harian:stats-cache:v1";
+const STATS_CACHE_KEY = "etd-laporan-harian:stats-cache:v2";
 
 export type StatsPeriod = "week" | "month" | "year";
 export type StatsTotals = { cases: number; merah: number; kuning: number; hijau: number; l1: number; l2: number; l3: number; l4: number; l5: number; asthma: number; oscc: number; kesBaru: number; kesUlangan: number; ward: number; ambulance: number; calls: number; bid: number; did: number };
@@ -230,7 +230,10 @@ export const reportRepository = {
         if (!grouped.has(key)) grouped.set(key, emptyTotals());
         addTotals(grouped.get(key)!, report);
       });
-      let callState: CallState | undefined;
+      const historical = reports.filter(r => !usesPHC(operationalDateForReport(r)));
+      const combined = emptyCalls();
+      historical.forEach(r => { for (const key of Object.keys(combined) as Array<keyof typeof combined>) combined[key] += r.calls[key]; });
+      let callState: CallState = { status: "ready", calls: combined };
       if (usesPHC(range.end)) {
         const start = range.start < PHC_INTEGRATION_START_DATE! ? PHC_INTEGRATION_START_DATE! : range.start;
         try {
@@ -238,13 +241,15 @@ export const reportRepository = {
           const calls = derivePHCCalls(rows, start, range.end);
           totals.calls = reports.filter(r => !usesPHC(operationalDateForReport(r))).reduce((sum, r) => sum + callsTotal(r.calls), 0) + callsTotal(calls);
           for (const [key, group] of grouped) group.calls = reports.filter(r => !usesPHC(operationalDateForReport(r)) && (period === "year" ? operationalDateForReport(r).slice(0, 7) : operationalDateForReport(r)) === key).reduce((sum, r) => sum + callsTotal(r.calls), 0);
-          for (const row of new Map(rows.filter(r => !r.deleted && !r.deletedAt).map(r => [r.phcId, r])).values()) {
-            const key = period === "year" ? row.operationalDate.slice(0, 7) : row.operationalDate;
+          const keys = new Set(rows.filter(r => r.status === "completed" && !r.deleted && !r.deletedAt).map(r => period === "year" ? r.operationalDate.slice(0, 7) : r.operationalDate));
+          for (const key of keys) {
+            const bucket = rows.filter(r => (period === "year" ? r.operationalDate.slice(0, 7) : r.operationalDate) === key);
             if (!grouped.has(key)) grouped.set(key, emptyTotals());
-            grouped.get(key)!.calls++;
+            grouped.get(key)!.calls += callsTotal(derivePHCCalls(bucket, start, range.end));
           }
           reports = reports.map(r => usesPHC(operationalDateForReport(r)) ? reportWithCalls(r, { status: "ready", calls: derivePHCCalls(rows, operationalDateForReport(r), operationalDateForReport(r), r.shift), fetchedAt: new Date().toISOString(), operationalDate: operationalDateForReport(r), shift: r.shift }) : r);
-          callState = { status: "ready", calls };
+          for (const key of Object.keys(combined) as Array<keyof typeof combined>) combined[key] += calls[key];
+          callState = { status: "ready", calls: combined };
         } catch { callState = { status: "error", message: PHC_ERROR }; }
       }
       const value: RemoteStats = { period, ...range, totals, reports, cacheKey, callState, groups: [...grouped.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => ({ key, ...item })) };
