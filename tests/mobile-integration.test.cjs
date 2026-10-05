@@ -25,6 +25,8 @@ const assert=require('node:assert/strict');
    }
    if(req.method()==='PATCH'){if(failWrite)return route.fulfill({status:503,body:'save failure test'});const fields=req.postDataJSON().fields;saved.push(JSON.parse(fields.reportJson.stringValue));reports=[...saved];return route.fulfill({json:{}})}
    if(url.includes('?'))return route.fulfill({json:{documents:reports.map(r=>({fields:{reportJson:{stringValue:JSON.stringify(r)}}}))}});
+   const existing=reports.find(r=>url.includes('/daily_reports/'+r.id));
+   if(existing)return route.fulfill({json:{fields:{reportJson:{stringValue:JSON.stringify(existing)}}}});
    return route.fulfill({status:404,body:'not found'});
   }
   return route.abort();
@@ -43,6 +45,47 @@ const assert=require('node:assert/strict');
  await p.locator('form input[type="date"]').fill('2026-10-03');
  await p.locator('form .segmented button').filter({hasText:/^Pagi$/}).click();
  await p.getByPlaceholder('Contoh: Rosli').fill('ISOLATED TEST');
+
+ // Master selection, live substring matching, manual strings and multiple drivers.
+ const memoryKey='etd-laporan-harian:suggestions:v2';
+ const staffStep=()=>p.getByRole('button',{name:'Langkah 2: Kakitangan',exact:true}).click();
+ const movementStep=()=>p.getByRole('button',{name:'Langkah 6: Ambulans & Kenderaan',exact:true}).click();
+ const choose=async(input,value)=>{await input.fill('');await p.getByRole('option',{name:value,exact:true}).tap();assert.equal(await input.inputValue(),value)};
+ await staffStep();
+ for(const [category,value] of [['Pegawai Perubatan','Dr Aiman'],['PPP','ROSLI'],['Nurse/Jururawat','RAJA'],['PPK','SUFIAN']]){
+  const card=p.locator('.staff-category-card').filter({has:p.getByRole('heading',{name:category,exact:true})});
+  await card.getByRole('button',{name:'+ Tambah nama',exact:true}).click();
+  const input=card.getByRole('combobox').last();
+  if(category==='PPP'){await input.fill('ros');assert.deepEqual(await p.getByRole('option').allTextContents(),['ROSLIZA','ROSLI']);}
+  await choose(input,value);
+  await card.getByRole('button',{name:'+ Tambah nama',exact:true}).click();
+  await card.getByRole('combobox').last().fill('CUSTOM '+category);
+ }
+ await movementStep();
+ for(const vehicle of ['VFP 6164','WXJ – Van Jenazah','WXJ – Minibus','CUSTOM VAN']){
+  await p.getByRole('button',{name:'+ Tambah perjalanan',exact:true}).click();
+  const card=p.locator('.ambulance-card').last(), inputs=card.getByRole('combobox');
+  if(vehicle==='CUSTOM VAN')await inputs.nth(0).fill(vehicle);else await choose(inputs.nth(0),vehicle);
+  await inputs.nth(1).fill('mer');
+  const related=await p.getByRole('option').allTextContents();
+  for(const value of ['Klinik Merapoh','Merapoh','Cameron Highland'])assert.ok(related.includes(value));
+  if(vehicle==='CUSTOM VAN')await inputs.nth(1).fill('Kuala Medang');else await choose(inputs.nth(1),vehicle==='WXJ – Minibus'?'Merapoh':'Klinik Merapoh');
+  await inputs.nth(2).fill('wad');assert.equal(await p.getByRole('option').count(),6);
+  if(vehicle==='CUSTOM VAN')await inputs.nth(2).fill('CUSTOM UNIT');else await choose(inputs.nth(2),'Fisioterapi');
+  await choose(card.getByRole('combobox',{name:'Pemandu 1',exact:true}),'NIK');
+  await card.getByRole('button',{name:'+ Tambah pemandu',exact:true}).click();
+  await card.getByRole('combobox',{name:'Pemandu 2',exact:true}).fill('CUSTOM DRIVER');
+  await card.getByRole('button',{name:'+ Tambah pemandu',exact:true}).click();
+  const third=card.getByRole('combobox',{name:'Pemandu 3',exact:true});await third.fill('azm');await third.press('ArrowDown');await third.press('Enter');assert.equal(await third.inputValue(),'AZMAN');
+ }
+ assert.equal(await p.evaluate(key=>localStorage.getItem(key),memoryKey),null,'Typing must not learn memory');
+ const destination=p.locator('.ambulance-card').last().getByRole('combobox').nth(1);
+ for(const width of [320,375,390,414,1280]){
+  await p.setViewportSize({width,height:844});await destination.click();
+  const bounds=await p.getByRole('listbox').boundingBox();assert.ok(bounds.height<=250);assert.ok(bounds.x>=0&&bounds.x+bounds.width<=width);assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+  await destination.press('Escape');
+ }
+ await p.setViewportSize({width:390,height:844});
  await p.getByRole('button',{name:'Langkah 3: Statistik kes',exact:true}).click();
  for(const [name,n] of [['L1',1],['L2',2],['L3',3],['L4',4],['L5',5],['Asthma Bay',6],['OSCC',7],['Masuk Wad',8]])await p.getByRole('textbox',{name,exact:true}).fill(String(n));
  await p.getByRole('button',{name:'Langkah 7: Panggilan',exact:true}).click();
@@ -65,15 +108,21 @@ const assert=require('node:assert/strict');
  assert.ok((await p.locator('.report-preview').innerText()).includes('Jumlah: 5'));
  failWrite=true;await p.getByRole('button',{name:'Simpan ke Firebase',exact:true}).click();
  await p.getByRole('alert').filter({hasText:'Laporan gagal disimpan. WhatsApp tidak dibuka.'}).waitFor();assert.equal(await p.getByRole('button',{name:'Hantar WhatsApp',exact:true}).count(),0);assert.equal(saved.length,0);
+ assert.equal(await p.evaluate(key=>localStorage.getItem(key),memoryKey),null,'Failed save must not learn memory');
  failWrite=false;await p.getByRole('button',{name:'Simpan ke Firebase',exact:true}).click();
  await p.waitForFunction(()=>document.querySelector('.page-dashboard'));
+ assert.equal(saved[0].staff.length,8);assert.equal(saved[0].staff[1].name,'CUSTOM Pegawai Perubatan');
+ assert.deepEqual(saved[0].ambulances.map(a=>a.vehicleNo),['VFP 6164','WXJ – Van Jenazah','WXJ – Minibus','CUSTOM VAN']);
+ assert.deepEqual(saved[0].ambulances[0].drivers,['NIK','CUSTOM DRIVER','AZMAN']);
+ const memory=await p.evaluate(key=>JSON.parse(localStorage.getItem(key)),memoryKey);
+ assert.deepEqual(memory.ppp.map(x=>x.value),['CUSTOM PPP']);assert.deepEqual(memory.drivers.map(x=>x.value),['CUSTOM DRIVER']);assert.deepEqual(memory.destinations.map(x=>x.value),['Kuala Medang']);assert.deepEqual(memory.units.map(x=>x.value),['CUSTOM UNIT']);assert.deepEqual(memory.vehicles.map(x=>x.value),['CUSTOM VAN']);
  assert.equal(saved.length,1);assert.equal(saved[0].calls.awam,2);assert.equal(saved[0].callsSource,'phc');
  await p.getByRole('heading',{name:'✓ Laporan berjaya disimpan'}).waitFor();
  await p.waitForFunction(()=>document.querySelector('dialog')?.open);
  const waBox=await p.getByRole('button',{name:'Hantar WhatsApp',exact:true}).boundingBox();assert.ok(waBox.y>=0 && waBox.y+waBox.height<844,'WhatsApp is immediately inside viewport without scroll');
  await p.evaluate(()=>{window.shareUrls=[];window.open=url=>{window.shareUrls.push(url);return {opener:null}};Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async text=>{window.copiedMessage=text}}});});
  const msg=await p.getByLabel('Mesej WhatsApp',{exact:true}).inputValue();
- assert.ok(msg.includes('Jumlah Pesakit: 21'));assert.ok(msg.includes('Diisi oleh: ISOLATED TEST'));assert.ok(msg.includes('BID: 0'));assert.ok(msg.includes('Pergerakan Ambulans & Kenderaan: 0'));assert.ok(msg.includes('Jumlah Panggilan Kecemasan: 5'));assert.ok(msg.includes('MECC / Call Centre: 1'));assert.ok(msg.includes('Awam: 2'));
+ assert.ok(msg.includes('Jumlah Pesakit: 21'));assert.ok(msg.includes('Diisi oleh: ISOLATED TEST'));assert.ok(msg.includes('BID: 0'));assert.ok(msg.includes('Pergerakan Ambulans & Kenderaan: 4'));assert.ok(msg.includes('Jumlah Panggilan Kecemasan: 5'));assert.ok(msg.includes('MECC / Call Centre: 1'));assert.ok(msg.includes('Awam: 2'));
  for(let i=0;i<2;i++)await p.getByRole('button',{name:'Hantar WhatsApp',exact:true}).click();
  const urls=await p.evaluate(()=>window.shareUrls);assert.equal(urls.length,2);assert.equal(new URL(urls[0]).searchParams.get('text'),msg);assert.equal(saved.length,1,'Sharing must not write Firestore');
  await p.getByRole('button',{name:'Copy Message',exact:true}).click();assert.equal(await p.evaluate(()=>window.copiedMessage),msg);assert.ok(await p.getByText('✓ Mesej disalin',{exact:true}).isVisible());
@@ -83,6 +132,21 @@ const assert=require('node:assert/strict');
  await p.evaluate(()=>{window.open=()=>null});await p.getByRole('button',{name:'Hantar WhatsApp',exact:true}).click();assert.ok(await p.getByText('WhatsApp tidak dapat dibuka. Gunakan Copy Message di bawah.',{exact:true}).isVisible());assert.equal(saved.length,1);
 
  await p.getByRole('button',{name:'Tutup',exact:true}).click();
+
+ // Reload device memory, then open the saved non-master values without correction.
+ await p.reload();await p.waitForFunction(()=>document.querySelector('.page-dashboard'));
+ await p.locator('.bottom-nav').getByRole('button',{name:/Rekod/}).click();
+ await p.getByRole('button',{name:'Papar 10 Rekod',exact:true}).click();
+ await p.locator('.record-card').first().getByRole('button',{name:'Edit',exact:true}).click();
+ await staffStep();
+ for(const category of ['Pegawai Perubatan','PPP','Nurse/Jururawat','PPK']){const input=p.getByRole('combobox',{name:`Nama ${category} 2`,exact:true});assert.equal(await input.inputValue(),'CUSTOM '+category);await input.fill('custom');assert.deepEqual(await p.getByRole('option').allTextContents(),['CUSTOM '+category]);await input.fill('CUSTOM '+category);await input.press('Escape');}
+ assert.equal(await p.getByRole('combobox',{name:'Nama PPP 2',exact:true}).inputValue(),'CUSTOM PPP');
+ await p.getByRole('combobox',{name:'Nama PPP 2',exact:true}).fill('custom');assert.deepEqual(await p.getByRole('option').allTextContents(),['CUSTOM PPP']);
+ await p.getByRole('combobox',{name:'Nama PPP 2',exact:true}).fill('CUSTOM PPP');
+ await movementStep();
+ const old=p.locator('.ambulance-card').last();assert.equal(await old.getByRole('combobox').nth(0).inputValue(),'CUSTOM VAN');assert.equal(await old.getByRole('combobox').nth(1).inputValue(),'Kuala Medang');assert.equal(await old.getByRole('combobox').nth(2).inputValue(),'CUSTOM UNIT');
+ await old.getByRole('combobox',{name:'Pemandu 3',exact:true}).fill('custom');assert.deepEqual(await p.getByRole('option').allTextContents(),['CUSTOM DRIVER']);
+ await old.getByRole('combobox',{name:'Pemandu 3',exact:true}).fill('AZMAN');
  await p.locator('.bottom-nav').getByRole('button',{name:/Statistik/}).click();
  for(const label of ['Mingguan','Bulanan','Tahunan']){
   await p.getByRole('button',{name:label,exact:true}).click();
@@ -118,5 +182,6 @@ const assert=require('node:assert/strict');
  assert.ok((await p.locator('.form-heading h2').innerText()).includes('Malam'));
  await p.locator('.bottom-nav').getByRole('button',{name:/Rekod/}).click();
  assert.equal(await p.evaluate(()=>window.subscriptions.size),0);
- assert.deepEqual(errors,[]);await browser.close();console.log('PASS ETD mobile: four sources, realtime after PHC edit, listener lifecycle and automatic shift boundary, error/save/print guard, derived save, week/month/year, widths320-414, no JS error, no production test writes');
+ assert.deepEqual(errors,[]);await browser.close();console.log('PASS ETD autocomplete: all master fields, touch/keyboard, custom save-only memory and refresh isolation, multiple drivers, distinct WXJ/destinations, legacy strings; regression: four sources, realtime after PHC edit, listener lifecycle and automatic shift boundary, error/save/print guard, derived save, week/month/year, widths320-414, no JS error, no production test writes');
 })().catch(e=>{console.error(e);process.exit(1)});
+
