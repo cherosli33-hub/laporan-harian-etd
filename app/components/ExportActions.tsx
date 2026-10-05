@@ -7,12 +7,12 @@ export function ExportActions({selector,filename,disabled=false}:{selector:strin
   useEffect(()=>{setFile(null);setMessage('');},[filename,selector]);
   async function prepare(share:boolean){
     setMessage('');setBusy(true);setFile(null);
-    if(share)dialog.current?.showModal();
+    dialog.current?.showModal();
     try{
       const root=document.querySelector<HTMLElement>(selector);if(!root)throw new Error('Pratonton tidak ditemui.');
       const {generatePreviewPdf}=await import('../lib/pdfExport');
       const ready=new File([await generatePreviewPdf(root)],filename,{type:'application/pdf'});setFile(ready);
-      if(!share)downloadPdf(ready);
+      if(!share)setMessage("PDF sedia untuk disimpan. Tekan Download PDF.");
       else setMessage(canSharePdf(ready)?'PDF sedia. Tekan Buka Share Sheet untuk memilih aplikasi.':'Perkongsian fail tidak disokong. Download PDF dan kongsi secara manual.');
     }catch{setMessage('PDF tidak dapat dijana. Cuba lagi atau gunakan Cetak.');}
     finally{setBusy(false);}
@@ -24,5 +24,5 @@ export function ExportActions({selector,filename,disabled=false}:{selector:strin
     try{await navigator.share({files:[file],title:filename});}
     catch(error){setMessage((error as Error).name==='AbortError'?'Perkongsian dibatalkan. PDF masih tersedia.':'Perkongsian tidak berjaya. Download PDF dan kongsi secara manual.');}
   }
-  return <div className="export-actions no-print"><div className="export-buttons"><button type="button" className="secondary" disabled={disabled||busy} onClick={()=>window.print()}>🖨 Cetak</button><button type="button" className="secondary" disabled={disabled||busy} onClick={()=>prepare(false)}>📄 PDF</button><button type="button" className="primary" disabled={disabled||busy} onClick={()=>prepare(true)}>📤 Kongsi PDF</button></div>{!dialog.current?.open && (busy||message)?<p role="status">{busy?'Menjana PDF…':message}</p>:null}<dialog ref={dialog} className="pdf-share-dialog"><h3>Kongsi PDF</h3><p role="status">{busy?'Menjana PDF…':message}</p>{file?<><p className="pdf-filename">{file.name}</p>{canSharePdf(file)?<button type="button" className="primary" onClick={shareReady}>📤 Buka Share Sheet</button>:null}<button type="button" className="secondary" onClick={()=>downloadPdf(file)}>📄 Download PDF</button></>:null}<button type="button" className="secondary" onClick={()=>window.print()}>🖨 Cetak</button><button type="button" className="secondary" onClick={()=>dialog.current?.close()}>Tutup</button></dialog></div>;
+  return <div className="export-actions no-print"><div className="export-buttons"><button type="button" className="secondary" disabled={disabled||busy} onClick={()=>window.print()}>🖨 Cetak</button><button type="button" className="secondary" disabled={disabled||busy} onClick={()=>prepare(false)}>📄 PDF</button><button type="button" className="primary" disabled={disabled||busy} onClick={()=>prepare(true)}>📤 Kongsi PDF</button></div>{!dialog.current?.open && (busy||message)?<p role="status">{busy?'Menjana PDF…':message}</p>:null}<dialog ref={dialog} className="pdf-share-dialog"><h3>PDF Laporan</h3><p role="status">{busy?'Menjana PDF…':message}</p>{file?<><p className="pdf-filename">{file.name}</p>{canSharePdf(file)?<button type="button" className="primary" onClick={shareReady}>📤 Buka Share Sheet</button>:null}<button type="button" className="secondary" onClick={()=>downloadPdf(file)}>📄 Download PDF</button></>:null}<button type="button" className="secondary" onClick={()=>window.print()}>🖨 Cetak</button><button type="button" className="secondary" onClick={()=>dialog.current?.close()}>Tutup</button></dialog></div>;
 }
