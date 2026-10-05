@@ -98,7 +98,7 @@ export default function Home() {
   useEffect(() => { if (finalSave && !successDialog.current?.open) successDialog.current?.showModal(); }, [finalSave]);
   const statsRequest = useRef(0);
   const [clock, setClock] = useState(() => shiftEngine.getOperationalShift());
-  const [followCurrentShift, setFollowCurrentShift] = useState(false);
+  const [selectedReportDate, setSelectedReportDate] = useState("");
   const [callRefresh, setCallRefresh] = useState(0);
   const [formCalls, setFormCalls] = useState<{ key: string; state: CallState } | null>(null);
   const [dailyCalls, setDailyCalls] = useState<{ key: string; state: CallState } | null>(null);
@@ -111,23 +111,17 @@ export default function Home() {
     let timer:number;
     const advance=()=>{
       const next=shiftEngine.getOperationalShift(); setClock(next);
-      if(followCurrentShift && view==="form" && !previewOnly) setDraft(previous=>{
-        const shift=shiftLabel(next.shift); if(previous.date===next.operationalDate && previous.shift===shift)return previous;
-        localReportRepository.saveDraft(withDerived(previous));
-        const id=`${next.operationalDate}_${shift}`;
-        return normalizeReport(localReportRepository.getDraft(id)||reports.find(r=>r.id===id)||emptyReport(next.operationalDate,shift));
-      });
       timer=window.setTimeout(advance,Math.max(1,shiftEngine.nextBoundary().getTime()-Date.now()+25));
     };
     advance(); const resume=()=>{window.clearTimeout(timer);advance();};
     window.addEventListener("focus",resume);
     return ()=>{window.clearTimeout(timer);window.removeEventListener("focus",resume);};
-  },[followCurrentShift,view,previewOnly,reports]);
+  },[]);
   useEffect(() => {
     if (view !== "form" || !usesPHC(callDate)) return;
     return listenPHCCalls(callDate,draft.shift,state=>setFormCalls({key:callKey,state}));
   }, [callDate, callKey, draft.shift, view, callRefresh]);
-  const dashboardDate = clock.operationalDate;
+  const dashboardDate = selectedReportDate || clock.operationalDate;
   useEffect(() => {
     if(view!=="dashboard"||!usesPHC(dashboardDate))return;
     // Daily total = three separately scoped shift snapshots. Never listen all history.
@@ -151,7 +145,7 @@ export default function Home() {
   }, []);
   useEffect(() => {
     let active=true;
-    const today = clock.operationalDate;
+    const today = dashboardDate;
     reportRepository.getByDate(today, false)
       .then((serverReports) => {
         if(!active)return;
@@ -165,7 +159,7 @@ export default function Home() {
         setSyncState("offline");
       });
     return ()=>{active=false;};
-  }, [clock.operationalDate]);
+  }, [dashboardDate]);
 
   useEffect(() => {
     if (!ready || view !== "form" || previewOnly) return;
@@ -178,7 +172,7 @@ export default function Home() {
 
   const suggestionValues = (kind: SuggestionKind) => suggestionStore.values(kind);
   const filledByOptions = suggestionValues("people");
-  const today = clock.operationalDate;
+  const today = dashboardDate;
   const todaysReports = useMemo(() => reports.filter((r) => r.date === today), [reports, today]);
   const filtered = useMemo(() => recordResults.slice().sort((a, b) => `${b.date}${b.shift}`.localeCompare(`${a.date}${a.shift}`)), [recordResults]);
   const notify = (message: string) => { setToast(message); window.setTimeout(() => setToast(""), 2600); };
@@ -217,10 +211,14 @@ export default function Home() {
     }
   };
   const startReport = (shift: Shift, date = reportingDateForShift()) => {
+    if (view === "form" && !previewOnly) {
+      localReportRepository.saveDraft(withDerived({ ...draft, id: `${draft.date}_${draft.shift}` }));
+      setDrafts(localReportRepository.getDrafts());
+    }
     setFinalSave(null); setShareStatus(""); setSaveError("");
     const existing = reports.find((r) => r.id === `${date}_${shift}`) || recordResults.find((r)=>r.id===`${date}_${shift}`);
     const remembered = localReportRepository.getDraft(`${date}_${shift}`);
-    setFollowCurrentShift(date===shiftEngine.getOperationalShift().operationalDate && shift===currentShift());
+
     setFormCalls(null);
     setPreviewOnly(false);
     setDraft(normalizeReport(remembered ? structuredClone(remembered) : existing ? structuredClone(existing) : emptyReport(date, shift)));
@@ -331,7 +329,9 @@ export default function Home() {
       {!ready ? <div className="loading">Menyiapkan ruang laporan…</div> : null}
 
       {ready && view === "dashboard" && <div className="page page-dashboard">
-        <section className="hero"><div><p className="eyebrow">HARI OPERASI ETD</p><h2>{formatDate(today)}</h2><p className="muted">Syif Malam kekal pada tarikh mula syif sehingga 7:00 pagi.</p></div><button className="primary desktop-action" onClick={() => startReport(currentShift())}>+ Isi laporan</button></section>
+        <section className="hero"><div><p className="eyebrow">HARI OPERASI ETD</p><h2>{formatDate(today)}</h2><p className="muted">Syif Malam kekal pada tarikh mula syif, termasuk laporan yang diisi lewat.</p></div><button className="primary desktop-action" onClick={() => startReport(currentShift(), today)}>+ Isi laporan</button></section>
+        <section className="filter-card"><Field label="Tarikh operasi" hint="Pilih tarikh terdahulu untuk melengkapkan laporan yang terlepas."><input type="date" value={today} max={clock.operationalDate} onChange={e => { if (e.target.value) { setSyncState("loading"); setSelectedReportDate(e.target.value); } }} /></Field><button className="secondary" onClick={() => { setSyncState("loading"); setSelectedReportDate(""); }}>Hari operasi semasa</button></section>
+        {drafts.some(r => r.date !== today) && <section className="section-block"><h2>Draf belum dihantar</h2><p className="muted">Draf kekal pada peranti ini walaupun tarikh atau syif bertukar.</p><div className="filter-actions">{drafts.filter(r => r.date !== today).sort((a,b) => b.date.localeCompare(a.date)).map(r => <button className="secondary" key={r.id} onClick={() => startReport(r.shift, r.date)}>Sambung {r.shift} · {formatDate(r.date)}</button>)}</div></section>}
         <section className="shift-grid">
           {shifts.map((shift, index) => {
             const report = todaysReports.find((r) => r.shift === shift);
@@ -353,7 +353,7 @@ export default function Home() {
                 <span>Obs. Ward <b>{entry?.carry.observation ?? "—"}</b></span>
               </div>
               {report ? <p className="updated">Dikemas kini {new Date(report.updatedAt).toLocaleTimeString("ms-MY", { hour: "2-digit", minute: "2-digit" })}</p> : remembered ? <p className="updated">Boleh sambung tanpa isi semula</p> : <p className="updated">Tiada laporan lagi</p>}
-              <button className={report ? "secondary" : "primary"} onClick={() => startReport(shift, today)}>{report ? "Lihat & kemas kini" : remembered ? "Sambung draf" : "Mula laporan"} <span>→</span></button>
+              <button disabled={syncState === "loading"} className={report ? "secondary" : "primary"} onClick={() => startReport(shift, today)}>{report ? "Lihat & kemas kini" : remembered ? "Sambung draf" : "Mula laporan"} <span>→</span></button>
             </article>;
           })}
         </section>
@@ -380,8 +380,8 @@ export default function Home() {
         {!previewOnly ? <div className="stepper no-print">{steps.map((label, i) => <button type="button" key={label} className={i === step ? "active" : i < step ? "done" : ""} onClick={() => setStep(i)} aria-label={`Langkah ${i + 1}: ${label}`}><span>{i < step ? "✓" : i + 1}</span><small>{label}</small></button>)}</div> : null}
         <section className="form-card">
           {step === 0 && <Step title="Maklumat asas" subtitle="Pilih tarikh, syif dan masukkan nama orang yang mengisi laporan."><div className="field-grid">
-            <Field label="Tarikh laporan"><input type="date" value={draft.date} onChange={(e) => { setFollowCurrentShift(false); updateDraft({ date: e.target.value, id: `${e.target.value}_${draft.shift}` }); }} required /></Field>
-            <Field label="Syif"><div className="segmented">{shifts.map((s) => <button type="button" key={s} className={draft.shift === s ? "selected" : ""} onClick={() => { setFollowCurrentShift(draft.date===shiftEngine.getOperationalShift().operationalDate && s===currentShift()); updateDraft({ shift: s, id: `${draft.date}_${s}` }); }}>{s}</button>)}</div></Field>
+            <Field label="Tarikh operasi" hint="Syif Malam menggunakan tarikh mula syif, walaupun diisi selepas 7 pagi."><input type="date" value={draft.date} max={clock.operationalDate} onChange={(e) => { if (e.target.value) startReport(draft.shift, e.target.value); }} required /></Field>
+            <Field label="Syif"><div className="segmented">{shifts.map((s) => <button type="button" key={s} className={draft.shift === s ? "selected" : ""} onClick={() => startReport(s, draft.date)}>{s}</button>)}</div></Field>
             <Field label="Nama pengisi" hint="Wajib diisi"><input list="filled-by-suggestions" value={draft.filledBy} onChange={(e) => updateDraft({ filledBy: e.target.value })} placeholder="Contoh: Rosli" autoComplete="off" required /><datalist id="filled-by-suggestions">{filledByOptions.map((name) => <option key={name} value={name} />)}</datalist></Field>
           </div></Step>}
           {step === 1 && <Step title="Kakitangan bertugas" subtitle="Pilih cadangan atau taip nama sendiri mengikut kategori. Nama baharu diingati pada peranti ini selepas simpan berjaya."><div className="staff-category-list">
