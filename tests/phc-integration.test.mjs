@@ -9,7 +9,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 
 const dir = await mkdtemp(path.join(tmpdir(), 'etd-phc-tests-'));
-for (const name of ['whatsapp', 'shiftEngine', 'phcLive', 'types', 'operationalDate', 'phcCalls', 'reportRepository', 'localReportRepository', 'suggestionStore', 'masterSuggestions']) {
+for (const name of ['pdfExport', 'whatsapp', 'shiftEngine', 'phcLive', 'types', 'operationalDate', 'phcCalls', 'reportRepository', 'localReportRepository', 'suggestionStore', 'masterSuggestions']) {
   let code = await readFile(new URL(`../app/lib/${name}.ts`, import.meta.url), 'utf8');
   if (name === 'phcCalls') code = code.replace('PHC_INTEGRATION_START_DATE: string | null = null', 'PHC_INTEGRATION_START_DATE: string | null = "2026-10-03"');
   code=code.replace("'../shared/operationalShift.js'",JSON.stringify(new URL('../app/shared/operationalShift.js',import.meta.url).href));
@@ -17,7 +17,7 @@ for (const name of ['whatsapp', 'shiftEngine', 'phcLive', 'types', 'operationalD
   const js = ts.transpileModule(code, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText.replace(/from (["'])\.\/(\w+)\1/g, 'from "$2.mjs"').replace(/from "(\w+)\.mjs"/g, 'from "./$1.mjs"');
   await writeFile(path.join(dir, `${name}.mjs`), js);
 }
-for (const name of ['CallBreakdown', 'StatsA4', 'Autocomplete']) {
+for (const name of ['ExportActions', 'CallBreakdown', 'StatsA4', 'Autocomplete']) {
   const source = await readFile(new URL(`../app/components/${name}.tsx`, import.meta.url), 'utf8');
   let js=ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.ESNext,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX}}).outputText.replace(/from (["'])\.\.\/lib\/(\w+)\1/g,'from "./$2.mjs"').replace(/from (["'])\.\/CallBreakdown\1/g, 'from "./CallBreakdown.mjs"');
   js=js.replace('from "react/jsx-runtime"',`from "${import.meta.resolve('react/jsx-runtime')}"`);
