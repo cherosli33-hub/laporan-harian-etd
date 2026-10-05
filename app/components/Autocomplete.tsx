@@ -10,6 +10,7 @@ export default function Autocomplete({ kind, value, onChange, placeholder, 'aria
  const [open, setOpen] = useState(false), [query, setQuery] = useState(''), [active, setActive] = useState(-1);
  const [position, setPosition] = useState<CSSProperties>({});
  const options = open ? suggestionStore.values(kind, query, Infinity) : [];
+ const showSuggestions = open && options.length > 0;
  useEffect(() => {
   if (!open) return;
   const place = () => {
@@ -39,7 +40,7 @@ export default function Autocomplete({ kind, value, onChange, placeholder, 'aria
  useEffect(() => { if (active >= 0) list.current?.children[active]?.scrollIntoView({ block: 'nearest' }); }, [active]);
  const choose = (option: string) => { interactingWithList.current = false; onChange(option); input.current?.focus(); setOpen(false); setActive(-1); };
  return <div className="etd-autocomplete">
-  <input ref={input} role="combobox" aria-label={label} aria-autocomplete="list" aria-expanded={open} aria-controls={open ? id : undefined} aria-activedescendant={open && active >= 0 ? `${id}-${active}` : undefined} autoComplete="off" value={value} placeholder={placeholder}
+  <input ref={input} role="combobox" aria-label={label} aria-autocomplete="list" aria-expanded={showSuggestions} aria-controls={showSuggestions ? id : undefined} aria-activedescendant={showSuggestions && active >= 0 ? `${id}-${active}` : undefined} autoComplete="off" value={value} placeholder={placeholder}
    onFocus={() => { setQuery(''); setActive(-1); setOpen(true); }}
    onClick={() => { if (!open) { setQuery(''); setActive(-1); setOpen(true); } }}
    onChange={event => { onChange(event.target.value); setQuery(event.target.value); setActive(-1); setOpen(true); }}
@@ -53,9 +54,8 @@ export default function Autocomplete({ kind, value, onChange, placeholder, 'aria
      event.preventDefault(); if (active >= 0 && options[active]) choose(options[active]); else setOpen(false);
     } else if (event.key === 'Tab') setOpen(false);
    }} />
-  {open && createPortal(<div ref={list} id={id} role="listbox" onPointerDown={() => { interactingWithList.current = true; }} onPointerCancel={() => { interactingWithList.current = false; }} aria-label={label || placeholder} className="etd-autocomplete-options no-print" style={{ ...position, ...(!options.length ? { pointerEvents: 'none' } : {}) }}>
+  {showSuggestions && createPortal(<div ref={list} id={id} role="listbox" onPointerDown={() => { interactingWithList.current = true; }} onPointerCancel={() => { interactingWithList.current = false; }} aria-label={label || placeholder} className="etd-autocomplete-options no-print" style={position}>
    {options.map((option, index) => <button type="button" role="option" aria-selected={active === index} id={`${id}-${index}`} key={option} tabIndex={-1} onMouseDown={event => event.preventDefault()} onClick={() => choose(option)}>{option}</button>)}
-   {!options.length && <div className="etd-autocomplete-empty">Tiada cadangan. Nilai yang ditaip boleh digunakan.</div>}
   </div>, document.body)}
  </div>;
 }

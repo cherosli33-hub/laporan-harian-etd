@@ -60,6 +60,8 @@ const assert=require('node:assert/strict');
   await choose(input,value);
   await card.getByRole('button',{name:'+ Tambah nama',exact:true}).click();
   await card.getByRole('combobox').last().fill('CUSTOM '+category);
+  assert.equal(await p.getByRole('listbox').count(),0,'Unmatched manual staff input must have no popup');
+  assert.equal(await card.getByRole('combobox').last().getAttribute('aria-expanded'),'false');
  }
  await movementStep();
  for(const vehicle of ['VFP 6164','WXJ – Van Jenazah','WXJ – Minibus','CUSTOM VAN']){
@@ -69,7 +71,14 @@ const assert=require('node:assert/strict');
   await inputs.nth(1).fill('mer');
   const related=await p.getByRole('option').allTextContents();
   for(const value of ['Klinik Merapoh','Merapoh','Cameron Highland'])assert.ok(related.includes(value));
-  if(vehicle==='CUSTOM VAN')await inputs.nth(1).fill('Kuala Medang');else await choose(inputs.nth(1),vehicle==='WXJ – Minibus'?'Merapoh':'Klinik Merapoh');
+  if(vehicle==='CUSTOM VAN'){
+   await inputs.nth(1).fill('Kuala Medang');
+   assert.equal(await p.getByRole('listbox').count(),0,'Unmatched destination must not obscure the input');
+   assert.equal(await inputs.nth(1).inputValue(),'Kuala Medang');
+   await inputs.nth(1).fill('mer');
+   assert.ok(await p.getByRole('option',{name:'Merapoh',exact:true}).isVisible(),'Suggestions return when text matches again');
+   await inputs.nth(1).fill('Kuala Medang');
+  }else await choose(inputs.nth(1),vehicle==='WXJ – Minibus'?'Merapoh':'Klinik Merapoh');
   await inputs.nth(2).fill('wad');assert.equal(await p.getByRole('option').count(),6);
   if(vehicle==='CUSTOM VAN')await inputs.nth(2).fill('CUSTOM UNIT');else await choose(inputs.nth(2),'Fisioterapi');
   await choose(card.getByRole('combobox',{name:'Pemandu 1',exact:true}),'NIK');
@@ -184,4 +193,3 @@ const assert=require('node:assert/strict');
  assert.equal(await p.evaluate(()=>window.subscriptions.size),0);
  assert.deepEqual(errors,[]);await browser.close();console.log('PASS ETD autocomplete: all master fields, touch/keyboard, custom save-only memory and refresh isolation, multiple drivers, distinct WXJ/destinations, legacy strings; regression: four sources, realtime after PHC edit, listener lifecycle and automatic shift boundary, error/save/print guard, derived save, week/month/year, widths320-414, no JS error, no production test writes');
 })().catch(e=>{console.error(e);process.exit(1)});
-

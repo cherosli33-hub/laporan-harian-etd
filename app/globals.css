@@ -55,4 +55,3 @@
 .etd-autocomplete-options { position: fixed; z-index: 1000; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; background: #fff; border: 1px solid #cbd5e1; border-radius: 10px; box-shadow: 0 8px 24px #0f172a26; padding: 4px; box-sizing: border-box; }
 .etd-autocomplete-options button { display: block; width: 100%; min-height: 44px; padding: 10px 12px; text-align: left; font: inherit; font-size: 16px; color: #1e293b; background: #fff; border: 0; border-radius: 6px; overflow-wrap: anywhere; }
 .etd-autocomplete-options button:hover, .etd-autocomplete-options button[aria-selected="true"] { background: #eff6ff; color: #1d4ed8; }
-.etd-autocomplete-empty { padding: 12px; font-size: 14px; color: #64748b; }
