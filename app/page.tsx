@@ -7,7 +7,7 @@ import { listenPHCCalls } from "./lib/phcLive";
 import { shiftEngine, shiftLabel } from "./lib/shiftEngine";
 import { usesPHC, reportWithCalls, reportCallsTotal, fieldCalls, callLabels, callsTotal, type CallState } from "./lib/phcCalls";
 import { operationalDateForReport, operationalDateFromTimestamp } from "./lib/operationalDate";
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Report, Shift, StatKey, emptyReport, normalizeReport } from "./lib/types";
 import { localReportRepository } from "./lib/localReportRepository";
 import { RemoteStats, StatsPeriod, StatsTotals, periodRange, reportRepository } from "./lib/reportRepository";
@@ -73,6 +73,19 @@ export default function Home() {
   const [busy, setBusy] = useState(false);
   const [ready, setReady] = useState(false);
   const [previewOnly, setPreviewOnly] = useState(false);
+
+  // Reset after the new step is rendered, including entry from another tab.
+  // Instant scrolling overrides the page's smooth CSS and avoids keeping a
+  // mobile keyboard focused on a field from the previous step.
+  useLayoutEffect(() => {
+    if (view !== "form") return;
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && active.matches("input, textarea, select")) active.blur();
+    const resetScroll = () => window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+    resetScroll();
+    const frame = window.requestAnimationFrame(resetScroll);
+    return () => window.cancelAnimationFrame(frame);
+  }, [view, step]);
 
   const [finalSave, setFinalSave] = useState<{report:Report;confirmedAt:string}|null>(null);
   const [shareStatus, setShareStatus] = useState("");
@@ -204,7 +217,6 @@ export default function Home() {
     setDraft(normalizeReport(remembered ? structuredClone(remembered) : existing ? structuredClone(existing) : emptyReport(date, shift)));
     setStep(0);
     setView("form");
-    window.scrollTo({ top: 0, behavior: "smooth" });
   };
   const leaveForm = (nextView: View = "dashboard") => {
     if (view === "form" && !previewOnly) {
@@ -287,7 +299,7 @@ export default function Home() {
     try { await navigator.clipboard.writeText(shareMessage); setShareStatus("✓ Mesej disalin"); }
     catch { setShareStatus("Clipboard tidak tersedia. Pilih dan salin mesej di bawah."); }
   };
-  const printReport = (report: Report) => { setFormCalls(null); setPreviewOnly(true); setDraft(structuredClone(report)); setStep(7); setView("form"); window.scrollTo({ top: 0, behavior: "smooth" }); };
+  const printReport = (report: Report) => { setFormCalls(null); setPreviewOnly(true); setDraft(structuredClone(report)); setStep(7); setView("form"); };
   const dayTotals = summarize(todaysReports);
   const dayCallState = dailyCalls?.key === today ? dailyCalls.state : { status: "loading" } as CallState;
   const dayCallTotal = usesPHC(today) ? dayCallState.status === "ready" ? callsTotal(dayCallState.calls!) : null : dayTotals.calls;
