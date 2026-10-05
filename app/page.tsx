@@ -146,6 +146,7 @@ export default function Home() {
   useEffect(() => {
     let active=true;
     const today = dashboardDate;
+    setSyncState("loading");
     reportRepository.getByDate(today, false)
       .then((serverReports) => {
         if(!active)return;
@@ -330,7 +331,7 @@ export default function Home() {
 
       {ready && view === "dashboard" && <div className="page page-dashboard">
         <section className="hero"><div><p className="eyebrow">HARI OPERASI ETD</p><h2>{formatDate(today)}</h2><p className="muted">Syif Malam kekal pada tarikh mula syif, termasuk laporan yang diisi lewat.</p></div><button className="primary desktop-action" onClick={() => startReport(currentShift(), today)}>+ Isi laporan</button></section>
-        <section className="filter-card"><Field label="Tarikh operasi" hint="Pilih tarikh terdahulu untuk melengkapkan laporan yang terlepas."><input type="date" value={today} max={clock.operationalDate} onChange={e => { if (e.target.value) { setSyncState("loading"); setSelectedReportDate(e.target.value); } }} /></Field><button className="secondary" onClick={() => { setSyncState("loading"); setSelectedReportDate(""); }}>Hari operasi semasa</button></section>
+        <section className="filter-card"><Field label="Tarikh operasi" hint="Pilih tarikh terdahulu untuk melengkapkan laporan yang terlepas."><input type="date" value={today} max={clock.operationalDate} onChange={e => { if (e.target.value) setSelectedReportDate(e.target.value); }} /></Field><button className="secondary" onClick={() => setSelectedReportDate("")}>Hari operasi semasa</button></section>
         {drafts.some(r => r.date !== today) && <section className="section-block"><h2>Draf belum dihantar</h2><p className="muted">Draf kekal pada peranti ini walaupun tarikh atau syif bertukar.</p><div className="filter-actions">{drafts.filter(r => r.date !== today).sort((a,b) => b.date.localeCompare(a.date)).map(r => <button className="secondary" key={r.id} onClick={() => startReport(r.shift, r.date)}>Sambung {r.shift} · {formatDate(r.date)}</button>)}</div></section>}
         <section className="shift-grid">
           {shifts.map((shift, index) => {
