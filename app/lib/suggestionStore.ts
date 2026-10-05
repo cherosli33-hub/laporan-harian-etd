@@ -55,7 +55,8 @@ export const suggestionStore = {
  },
  values(kind: SuggestionKind, query = '', limit = 12): string[] {
   const needle = comparable(query);
-  return [...masterSuggestions[kind], ...read()[kind].map(item => item.value)]
+  const masterOnly = ['vehicles', 'destinations', 'units', 'drivers'].includes(kind);
+  return [...masterSuggestions[kind], ...(masterOnly ? [] : read()[kind].map(item => item.value))]
    .filter(value => !needle || comparable(value).includes(needle)).slice(0, limit);
  },
 };

@@ -87,7 +87,7 @@ export default function Home() {
     return () => window.cancelAnimationFrame(frame);
   }, [view, step]);
 
-  const [finalSave, setFinalSave] = useState<{report:Report;confirmedAt:string}|null>(null);
+  const [finalSave, setFinalSave] = useState<{report:Report;confirmedAt:string;dailyReports?:Report[]}|null>(null);
   const [shareStatus, setShareStatus] = useState("");
   const saveInFlight = useRef(false);
   const successDialog = useRef<HTMLDialogElement>(null);
@@ -187,7 +187,14 @@ export default function Home() {
     setBusy(true);
     try {
       const saved = await reportRepository.save(withDerived({ ...report, updatedAt: new Date().toISOString() }));
-      setFinalSave({report:structuredClone(saved.report),confirmedAt:new Date().toISOString()});
+      let dailyReports: Report[] | undefined;
+      if (saved.report.shift === "Malam") {
+        try {
+          const rows = await reportRepository.getByDate(operationalDateForReport(saved.report), false);
+          dailyReports = upsertReport(rows, saved.report);
+        } catch { /* The shift save remains successful; the message marks totals unavailable. */ }
+      }
+      setFinalSave({report:structuredClone(saved.report),confirmedAt:new Date().toISOString(),dailyReports});
       suggestionStore.remember(saved.report);
       setSuggestionVersion((value) => value + 1);
       localReportRepository.removeDraft(report.id);
@@ -287,7 +294,7 @@ export default function Home() {
     const cancelRequest = () => { statsRequest.current++; };
     return () => { window.clearTimeout(timer); cancelRequest(); };
   }, [loadStats, ready, view, callRefresh]);
-  const shareMessage = finalSave ? generateWhatsAppMessage(finalSave.report, finalSave.confirmedAt) : "";
+  const shareMessage = finalSave ? generateWhatsAppMessage(finalSave.report, finalSave.confirmedAt, finalSave.dailyReports) : "";
   const openWhatsApp = () => {
     if (!finalSave) return;
     const opened = window.open(buildWhatsAppUrl(shareMessage), "_blank");
@@ -395,9 +402,9 @@ export default function Home() {
           {step === 4 && <Step title="Laporan kes" subtitle="Rekodkan BID, DID dan sebarang kejadian atau catatan penting."><div className="counter-grid two"><Counter label="BID" value={draft.bid} onChange={(v) => updateDraft({ bid: v })} tone="bid" /><Counter label="DID" value={draft.did} onChange={(v) => updateDraft({ did: v })} tone="did" /></div><Field label="Catatan laporan" hint="Pilihan"><textarea value={draft.caseNotes} onChange={(e) => updateDraft({ caseNotes: e.target.value })} placeholder="Catat kejadian penting dalam syif ini…" rows={6} /></Field></Step>}
           {step === 5 && <Step title="Pergerakan Ambulans & Kenderaan" subtitle="Tambah satu rekod bagi setiap perjalanan ambulans atau kenderaan."><div className="ambulance-list">
             {draft.ambulances.map((item, i) => <article className="ambulance-card" key={item.id}><div className="repeat-title"><h3>Perjalanan {i + 1}</h3><button type="button" className="text-danger" onClick={() => setDraft((d) => ({ ...d, ambulances: d.ambulances.filter((a) => a.id !== item.id) }))}>Padam</button></div><div className="field-grid compact">
-              <Field label="No. ambulans / kenderaan"><Autocomplete kind="vehicles" value={item.vehicleNo} placeholder="WQB 1234" onChange={(value) => setDraft((d) => ({ ...d, ambulances: d.ambulances.map((a) => a.id === item.id ? { ...a, vehicleNo: value } : a) }))} /></Field>
-              <Field label="Destinasi"><Autocomplete kind="destinations" value={item.destination} placeholder="Hospital Temerloh" onChange={(value) => setDraft((d) => ({ ...d, ambulances: d.ambulances.map((a) => a.id === item.id ? { ...a, destination: value } : a) }))} /></Field>
-              <Field label="Unit / jabatan"><Autocomplete kind="units" value={item.unit} placeholder="ETD" onChange={(value) => setDraft((d) => ({ ...d, ambulances: d.ambulances.map((a) => a.id === item.id ? { ...a, unit: value } : a) }))} /></Field>
+              <Field label="No. ambulans / kenderaan"><Autocomplete kind="vehicles" value={item.vehicleNo} placeholder="Cari / pilih no. kenderaan" onChange={(value) => setDraft((d) => ({ ...d, ambulances: d.ambulances.map((a) => a.id === item.id ? { ...a, vehicleNo: value } : a) }))} /></Field>
+              <Field label="Destinasi"><Autocomplete kind="destinations" value={item.destination} placeholder="Cari / pilih destinasi" onChange={(value) => setDraft((d) => ({ ...d, ambulances: d.ambulances.map((a) => a.id === item.id ? { ...a, destination: value } : a) }))} /></Field>
+              <Field label="Unit / jabatan"><Autocomplete kind="units" value={item.unit} placeholder="Cari / pilih unit" onChange={(value) => setDraft((d) => ({ ...d, ambulances: d.ambulances.map((a) => a.id === item.id ? { ...a, unit: value } : a) }))} /></Field>
               <div className="driver-list"><span>Pemandu</span>{item.drivers.map((driver, driverIndex) => <div className="driver-row" key={`${item.id}-${driverIndex}`}><Autocomplete kind="drivers" aria-label={`Pemandu ${driverIndex + 1}`} value={driver} placeholder={`Pemandu ${driverIndex + 1}`} onChange={(newValue) => setDraft((d) => ({ ...d, ambulances: d.ambulances.map((a) => a.id === item.id ? { ...a, drivers: a.drivers.map((value, index) => index === driverIndex ? newValue : value) } : a) }))} />{item.drivers.length > 1 ? <button type="button" className="icon-btn danger" aria-label={`Buang pemandu ${driverIndex + 1}`} onClick={() => setDraft((d) => ({ ...d, ambulances: d.ambulances.map((a) => a.id === item.id ? { ...a, drivers: a.drivers.filter((_, index) => index !== driverIndex) } : a) }))}>×</button> : null}</div>)}<button type="button" className="link-btn" onClick={() => setDraft((d) => ({ ...d, ambulances: d.ambulances.map((a) => a.id === item.id ? { ...a, drivers: [...a.drivers, ""] } : a) }))}>+ Tambah pemandu</button></div>
               <Field label="Masa keluar"><input type="time" value={item.timeOut} onChange={(e) => setDraft((d) => ({ ...d, ambulances: d.ambulances.map((a) => a.id === item.id ? { ...a, timeOut: e.target.value } : a) }))} /></Field><Field label="Masa balik"><input type="time" value={item.timeIn} onChange={(e) => setDraft((d) => ({ ...d, ambulances: d.ambulances.map((a) => a.id === item.id ? { ...a, timeIn: e.target.value } : a) }))} /></Field>
             </div></article>)}
@@ -501,4 +508,3 @@ function completeTrendGroups(stats: RemoteStats | null): RemoteStats["groups"] {
 function summarize(reports: Report[]) {
   return reports.reduce((a, r) => { const zone = derived(r); return ({ cases: a.cases + totalCases(r), merah: a.merah + zone.merah, kuning: a.kuning + zone.kuning, hijau: a.hijau + zone.hijau, ward: a.ward + r.stats.masukWad, ambulance: a.ambulance + r.ambulances.length, calls: a.calls + (totalCalls(r) ?? 0), bid: a.bid + r.bid, did: a.did + r.did, asthma: a.asthma + r.stats.asthmaBay, oscc: a.oscc + r.stats.oscc, l1: a.l1 + r.stats.l1, l2: a.l2 + r.stats.l2, l3: a.l3 + r.stats.l3, l4: a.l4 + r.stats.l4, l5: a.l5 + r.stats.l5, kesBaru: a.kesBaru + zone.kesBaru, kesUlangan: a.kesUlangan + zone.kesUlangan }); }, { cases: 0, merah: 0, kuning: 0, hijau: 0, ward: 0, ambulance: 0, calls: 0, bid: 0, did: 0, asthma: 0, oscc: 0, l1: 0, l2: 0, l3: 0, l4: 0, l5: 0, kesBaru: 0, kesUlangan: 0 });
 }
-

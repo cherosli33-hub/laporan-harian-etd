@@ -29,16 +29,17 @@ test('save memory deduplicates defaults and customs without changing report stri
  assert.equal(JSON.stringify(r),before);
  const memory=JSON.parse(data.get(SUGGESTION_STORAGE_KEY));assert.deepEqual(memory.ppp.map(i=>i.value),['HAFIZ']);assert.deepEqual(memory.drivers.map(i=>i.value),['Custom Driver']);
  assert.deepEqual(memory.doctors.map(i=>i.value),['Custom Doctor']);assert.deepEqual(memory.nurses.map(i=>i.value),['Custom Nurse']);assert.deepEqual(memory.ppk.map(i=>i.value),['Custom PPK']);
+ for(const [kind,value] of [['drivers','Custom Driver'],['vehicles','Custom Van'],['units','Custom Unit'],['destinations','Kuala Medang']])assert.deepEqual(suggestionStore.values(kind,value,Infinity),[]);
  assert.deepEqual(suggestionStore.values('drivers','hafiz',Infinity),[]);assert.deepEqual(suggestionStore.values('units','Kuala Medang',Infinity),[]);
- assert.deepEqual(suggestionStore.values('destinations','kuala med',Infinity),['Kuala Medang']);
+ assert.deepEqual(suggestionStore.values('destinations','kuala med',Infinity),[]);
 });
 test('reading suggestions never stores unsaved partial input',()=>{
  const data=setup();suggestionStore.values('destinations','KUA',Infinity);assert.equal(data.size,0);
 });
 test('legacy suggestions stay available without inventing staff roles',()=>{
  const data=setup();data.set('etd-laporan-harian:suggestions:v1',JSON.stringify({people:[{value:'Legacy Person'}],drivers:[{value:'Legacy Driver'},{value:' nik '}],destinations:[{value:'Legacy Place'}]}));
- assert.deepEqual(suggestionStore.values('people'),['Legacy Person']);assert.deepEqual(suggestionStore.values('ppp','Legacy',Infinity),[]);assert.deepEqual(suggestionStore.values('drivers','legacy',Infinity),['Legacy Driver']);
- suggestionStore.remember(report());assert.deepEqual(suggestionStore.values('destinations','legacy',Infinity),['Legacy Place']);
+ assert.deepEqual(suggestionStore.values('people'),['Legacy Person']);assert.deepEqual(suggestionStore.values('ppp','Legacy',Infinity),[]);assert.deepEqual(suggestionStore.values('drivers','legacy',Infinity),[]);
+ suggestionStore.remember(report());assert.deepEqual(suggestionStore.values('destinations','legacy',Infinity),[]);
 });
 test('malformed or blocked device memory cannot break defaults or successful saves',()=>{
  const data=setup();data.set(SUGGESTION_STORAGE_KEY,JSON.stringify({ppp:[null,{}, {value:42}, {value:'rosli'}, {value:'Hafiz'}, {value:' HAFIZ ' }]}));assert.deepEqual(suggestionStore.values('ppp','hafiz',Infinity),['Hafiz']);
