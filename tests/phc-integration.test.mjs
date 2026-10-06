@@ -150,3 +150,15 @@ test('several calls sum within one operational shift; ready status carries serve
   assert.match(status,/Pagi/);
 });
 
+
+
+test('late night save uses original day; final guard blocks stale drafts and concurrent duplicate writes',async()=>{
+ fail=false;rows=[];etd=[];writes=[];
+ const night=emptyReport('2026-10-05','Malam');night.filledBy='Pengisi';
+ const saved=await reportRepository.save(night,{expectedUpdatedAt:null});
+ assert.equal(saved.report.date,'2026-10-05');assert.equal(saved.report.operationalDate,'2026-10-05');assert.equal(saved.report.shift,'Malam');assert.equal(saved.report.id,'2026-10-05_Malam');
+ etd=[saved.report];const n=writes.length;
+ await assert.rejects(reportRepository.save(night,{expectedUpdatedAt:null}),/Final Save/);assert.equal(writes.length,n);
+ await assert.rejects(reportRepository.save(night,{expectedUpdatedAt:'stale'}),/Final Save/);assert.equal(writes.length,n);
+ await reportRepository.save(saved.report,{expectedUpdatedAt:saved.report.updatedAt});assert.equal(writes.length,n+1);
+});

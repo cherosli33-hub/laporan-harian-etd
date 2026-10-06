@@ -98,7 +98,11 @@ export default function Home() {
   useEffect(() => { if (finalSave && !successDialog.current?.open) successDialog.current?.showModal(); }, [finalSave]);
   const statsRequest = useRef(0);
   const [clock, setClock] = useState(() => shiftEngine.getOperationalShift());
-  const [selectedReportDate, setSelectedReportDate] = useState("");
+  const [inspectionDate, setInspectionDate] = useState("");
+  const [verifiedDay, setVerifiedDay] = useState("");
+  const [inspectionRead, setInspectionRead] = useState<{date:string;status:"loading"|"ready"|"error";reports:Report[]}>({date:"",status:"loading",reports:[]});
+  const initialForm = useRef("");
+  const editingFinal = useRef<string | null>(null);
   const [callRefresh, setCallRefresh] = useState(0);
   const [formCalls, setFormCalls] = useState<{ key: string; state: CallState } | null>(null);
   const [dailyCalls, setDailyCalls] = useState<{ key: string; state: CallState } | null>(null);
@@ -121,7 +125,7 @@ export default function Home() {
     if (view !== "form" || !usesPHC(callDate)) return;
     return listenPHCCalls(callDate,draft.shift,state=>setFormCalls({key:callKey,state}));
   }, [callDate, callKey, draft.shift, view, callRefresh]);
-  const dashboardDate = selectedReportDate || clock.operationalDate;
+  const dashboardDate = clock.operationalDate;
   useEffect(() => {
     if(view!=="dashboard"||!usesPHC(dashboardDate))return;
     // Daily total = three separately scoped shift snapshots. Never listen all history.
@@ -145,25 +149,37 @@ export default function Home() {
   }, []);
   useEffect(() => {
     let active=true;
-    const today = dashboardDate;
-    setSyncState("loading");
+    const today = clock.operationalDate;
     reportRepository.getByDate(today, false)
       .then((serverReports) => {
         if(!active)return;
         setReports(serverReports);
+        setVerifiedDay(today);
         setSyncState("online");
       })
       .catch(() => {
         if(!active)return;
         const cached = reportRepository.cachedReports(today);
         setReports(cached);
+        setVerifiedDay("");
         setSyncState("offline");
       });
     return ()=>{active=false;};
-  }, [dashboardDate]);
+  }, [clock.operationalDate]);
 
+  const inspectionDay = inspectionDate || clock.operationalDate;
+  const inspectionRows = inspectionDay === clock.operationalDate ? reports : inspectionRead.date === inspectionDay ? inspectionRead.reports : [];
+  const inspectionVerified = inspectionDay === clock.operationalDate ? verifiedDay === inspectionDay && syncState === "online" : inspectionRead.date === inspectionDay && inspectionRead.status === "ready";
+  useEffect(() => {
+    if (inspectionDay === clock.operationalDate) return;
+    let active=true;
+    setInspectionRead({date:inspectionDay,status:"loading",reports:[]});
+    reportRepository.getByDate(inspectionDay,false).then(rows => { if(active)setInspectionRead({date:inspectionDay,status:"ready",reports:rows}); }).catch(() => { if(active)setInspectionRead({date:inspectionDay,status:"error",reports:[]}); });
+    return () => { active=false; };
+  },[inspectionDay,clock.operationalDate]);
   useEffect(() => {
     if (!ready || view !== "form" || previewOnly) return;
+    if (editingFinal.current && JSON.stringify(draft) === initialForm.current) return;
     const timer = window.setTimeout(() => {
       localReportRepository.saveDraft(withDerived({ ...draft, id: `${draft.date}_${draft.shift}` }));
       setDrafts(localReportRepository.getDrafts());
@@ -173,7 +189,7 @@ export default function Home() {
 
   const suggestionValues = (kind: SuggestionKind) => suggestionStore.values(kind);
   const filledByOptions = suggestionValues("people");
-  const today = dashboardDate;
+  const today = clock.operationalDate;
   const todaysReports = useMemo(() => reports.filter((r) => r.date === today), [reports, today]);
   const filtered = useMemo(() => recordResults.slice().sort((a, b) => `${b.date}${b.shift}`.localeCompare(`${a.date}${a.shift}`)), [recordResults]);
   const notify = (message: string) => { setToast(message); window.setTimeout(() => setToast(""), 2600); };
@@ -183,7 +199,7 @@ export default function Home() {
     setFinalSave(null); setShareStatus(""); setSaveError("");
     setBusy(true);
     try {
-      const saved = await reportRepository.save(withDerived({ ...report, updatedAt: new Date().toISOString() }));
+      const saved = await reportRepository.save(withDerived({ ...report, updatedAt: new Date().toISOString() }), { expectedUpdatedAt: editingFinal.current });
       let dailyReports: Report[] | undefined;
       if (saved.report.shift === "Malam") {
         try {
@@ -196,6 +212,7 @@ export default function Home() {
       setSuggestionVersion((value) => value + 1);
       localReportRepository.removeDraft(report.id);
       setReports((prev) => upsertReport(prev, saved.report));
+      setInspectionRead(prev => prev.date === operationalDateForReport(saved.report) ? {date:prev.date,status:"ready",reports:upsertReport(prev.reports,saved.report)} : prev);
       setRecordResults((prev) => upsertReport(prev, saved.report));
       setDrafts(localReportRepository.getDrafts());
       setSyncState("online");
@@ -211,23 +228,25 @@ export default function Home() {
       setBusy(false);
     }
   };
-  const startReport = (shift: Shift, date = reportingDateForShift()) => {
-    if (view === "form" && !previewOnly) {
-      localReportRepository.saveDraft(withDerived({ ...draft, id: `${draft.date}_${draft.shift}` }));
-      setDrafts(localReportRepository.getDrafts());
-    }
-    setFinalSave(null); setShareStatus(""); setSaveError("");
-    const existing = reports.find((r) => r.id === `${date}_${shift}`) || recordResults.find((r)=>r.id===`${date}_${shift}`);
-    const remembered = localReportRepository.getDraft(`${date}_${shift}`);
-
-    setFormCalls(null);
-    setPreviewOnly(false);
-    setDraft(normalizeReport(remembered ? structuredClone(remembered) : existing ? structuredClone(existing) : emptyReport(date, shift)));
-    setStep(0);
-    setView("form");
+  const startReport = async (shift: Shift, date = reportingDateForShift()) => {
+    if (busy) return;
+    if(view === "form" && !previewOnly && (!editingFinal.current || JSON.stringify(draft)!==initialForm.current)){localReportRepository.saveDraft(withDerived(draft));setDrafts(localReportRepository.getDrafts());}
+    setBusy(true);
+    try {
+      // Always confirm the final state before considering a browser-local draft.
+      const rows = await reportRepository.getByDate(date, false);
+      const existing = rows.find(r => operationalDateForReport(r) === date && r.shift === shift);
+      const remembered = existing ? undefined : localReportRepository.getDraft(`${date}_${shift}`);
+      const next = normalizeReport(structuredClone(existing || remembered || emptyReport(date,shift)));
+      editingFinal.current = existing?.updatedAt || null;
+      initialForm.current = JSON.stringify(next);
+      setFinalSave(null); setShareStatus(""); setSaveError("");
+      setFormCalls(null); setPreviewOnly(false); setDraft(next); setStep(0); setView("form");
+    } catch { notify("Tidak dapat menyemak status Firebase. Cuba semula sebelum membuka laporan."); }
+    finally { setBusy(false); }
   };
   const leaveForm = (nextView: View = "dashboard") => {
-    if (view === "form" && !previewOnly) {
+    if (view === "form" && !previewOnly && (!editingFinal.current || JSON.stringify(draft) !== initialForm.current)) {
       localReportRepository.saveDraft(withDerived({ ...draft, id: `${draft.date}_${draft.shift}` }));
       setDrafts(localReportRepository.getDrafts());
     }
@@ -330,17 +349,16 @@ export default function Home() {
       {!ready ? <div className="loading">Menyiapkan ruang laporan…</div> : null}
 
       {ready && view === "dashboard" && <div className="page page-dashboard">
-        <section className="hero"><div><p className="eyebrow">HARI OPERASI ETD</p><h2>{formatDate(today)}</h2><p className="muted">Syif Malam kekal pada tarikh mula syif, termasuk laporan yang diisi lewat.</p></div><button className="primary desktop-action" onClick={() => startReport(currentShift(), today)}>+ Isi laporan</button></section>
-        <section className="filter-card"><Field label="Tarikh operasi" hint="Pilih tarikh terdahulu untuk melengkapkan laporan yang terlepas."><input type="date" value={today} max={clock.operationalDate} onChange={e => { if (e.target.value) setSelectedReportDate(e.target.value); }} /></Field><button className="secondary" onClick={() => setSelectedReportDate("")}>Hari operasi semasa</button></section>
-        {drafts.some(r => r.date !== today) && <section className="section-block"><h2>Draf belum dihantar</h2><p className="muted">Draf kekal pada peranti ini walaupun tarikh atau syif bertukar.</p><div className="filter-actions">{drafts.filter(r => r.date !== today).sort((a,b) => b.date.localeCompare(a.date)).map(r => <button className="secondary" key={r.id} onClick={() => startReport(r.shift, r.date)}>Sambung {r.shift} · {formatDate(r.date)}</button>)}</div></section>}
+        <section className="hero"><div><p className="eyebrow">HARI OPERASI ETD</p><h2>{formatDate(today)}</h2><p className="muted">Syif Malam kekal pada tarikh mula syif sehingga 7:00 pagi.</p></div><button className="primary desktop-action" onClick={() => startReport(currentShift())}>+ Isi laporan</button></section>
+        <div className="section-heading no-print" style={{flexWrap:"wrap",gap:8}}><p className="eyebrow">PEMERIKSAAN SHIFT</p><label style={{display:"flex",alignItems:"center",gap:8,fontSize:14}}>Tarikh <input type="date" aria-label="Tarikh pemeriksaan shift" style={{width:150,minHeight:40}} value={inspectionDay} max={clock.operationalDate} onChange={e => {if(e.target.value)setInspectionDate(e.target.value);}} /></label></div>
         <section className="shift-grid">
           {shifts.map((shift, index) => {
-            const report = todaysReports.find((r) => r.shift === shift);
-            const remembered = drafts.find((r) => r.id === `${today}_${shift}`);
+            const report = inspectionVerified ? inspectionRows.find(r => operationalDateForReport(r) === inspectionDay && r.shift === shift) : undefined;
+            const remembered = inspectionVerified && !report ? drafts.find(r => r.id === `${inspectionDay}_${shift}`) : undefined;
             const entry = report || remembered;
             const zone = entry ? derived(entry) : null;
             return <article className={`shift-card shift-${index}`} key={shift}>
-              <div className="shift-card-top"><span className="shift-icon">{index === 0 ? "☀" : index === 1 ? "◐" : "☾"}</span><span className={`status ${report ? "complete" : remembered ? "draft" : ""}`}>{report ? "Sudah diisi" : remembered ? "Draf disimpan" : "Belum diisi"}</span></div>
+              <div className="shift-card-top"><span className="shift-icon">{index === 0 ? "☀" : index === 1 ? "◐" : "☾"}</span><span className={`status ${report ? "complete" : remembered ? "draft" : ""}`}>{!inspectionVerified ? "Semakan Firebase belum disahkan" : report ? "Sudah diisi" : remembered ? "Draf disimpan" : "Belum diisi"}</span></div>
               <h3>Syif {shift}</h3><p className="shift-time">{shiftTimes[shift]}</p><p className="case-total"><strong>{entry ? totalCases(entry) : "—"}</strong> <span>jumlah kes</span></p>
               <div className="shift-zone-row" aria-label={`Pecahan zon syif ${shift}`}>
                 <span><i className="dot-red" />Merah <b>{zone?.merah ?? "—"}</b></span>
@@ -354,7 +372,7 @@ export default function Home() {
                 <span>Obs. Ward <b>{entry?.carry.observation ?? "—"}</b></span>
               </div>
               {report ? <p className="updated">Dikemas kini {new Date(report.updatedAt).toLocaleTimeString("ms-MY", { hour: "2-digit", minute: "2-digit" })}</p> : remembered ? <p className="updated">Boleh sambung tanpa isi semula</p> : <p className="updated">Tiada laporan lagi</p>}
-              <button disabled={syncState === "loading"} className={report ? "secondary" : "primary"} onClick={() => startReport(shift, today)}>{report ? "Lihat & kemas kini" : remembered ? "Sambung draf" : "Mula laporan"} <span>→</span></button>
+              <button disabled={!inspectionVerified || busy} className={report ? "secondary" : "primary"} onClick={() => void startReport(shift, inspectionDay)}>{report ? "Lihat & kemas kini" : remembered ? "Sambung draf" : "Mula laporan"} <span>→</span></button>
             </article>;
           })}
         </section>
@@ -381,8 +399,8 @@ export default function Home() {
         {!previewOnly ? <div className="stepper no-print">{steps.map((label, i) => <button type="button" key={label} className={i === step ? "active" : i < step ? "done" : ""} onClick={() => setStep(i)} aria-label={`Langkah ${i + 1}: ${label}`}><span>{i < step ? "✓" : i + 1}</span><small>{label}</small></button>)}</div> : null}
         <section className="form-card">
           {step === 0 && <Step title="Maklumat asas" subtitle="Pilih tarikh, syif dan masukkan nama orang yang mengisi laporan."><div className="field-grid">
-            <Field label="Tarikh operasi" hint="Syif Malam menggunakan tarikh mula syif, walaupun diisi selepas 7 pagi."><input type="date" value={draft.date} max={clock.operationalDate} onChange={(e) => { if (e.target.value) startReport(draft.shift, e.target.value); }} required /></Field>
-            <Field label="Syif"><div className="segmented">{shifts.map((s) => <button type="button" key={s} className={draft.shift === s ? "selected" : ""} onClick={() => startReport(s, draft.date)}>{s}</button>)}</div></Field>
+            <Field label="Tarikh laporan"><input type="date" value={draft.date} onChange={(e) => { if(e.target.value){if(!editingFinal.current || JSON.stringify(draft)!==initialForm.current)localReportRepository.saveDraft(withDerived(draft));void startReport(draft.shift,e.target.value);} }} required /></Field>
+            <Field label="Syif"><div className="segmented">{shifts.map((s) => <button type="button" key={s} className={draft.shift === s ? "selected" : ""} onClick={() => { if(!editingFinal.current || JSON.stringify(draft)!==initialForm.current)localReportRepository.saveDraft(withDerived(draft));void startReport(s,draft.date); }}>{s}</button>)}</div></Field>
             <Field label="Nama pengisi" hint="Wajib diisi"><input list="filled-by-suggestions" value={draft.filledBy} onChange={(e) => updateDraft({ filledBy: e.target.value })} placeholder="Contoh: Rosli" autoComplete="off" required /><datalist id="filled-by-suggestions">{filledByOptions.map((name) => <option key={name} value={name} />)}</datalist></Field>
           </div></Step>}
           {step === 1 && <Step title="Kakitangan bertugas" subtitle="Pilih cadangan atau taip nama sendiri mengikut kategori. Nama baharu diingati pada peranti ini selepas simpan berjaya."><div className="staff-category-list">
@@ -429,7 +447,7 @@ export default function Home() {
 
       {ready && view === "stats" && <div className="page stats-page"><section className="hero stats-hero"><div><p className="eyebrow">ANALISIS ETD</p><h2>Statistik ETD</h2><p className="muted">Satu bacaan bagi setiap tempoh; kad, graf dan jadual berkongsi dataset yang sama.</p></div><button className="secondary stats-refresh" disabled={busy} onClick={() => void loadStats(true)}>{busy ? "Memuat…" : "↻ Refresh"}</button></section>
         <button className="primary no-print" disabled={busy || !remoteStats || remoteStats.callState?.status !== "ready"} onClick={() => {setView("stats-preview"); window.scrollTo(0,0);}}>Preview Laporan A4</button>
-        <PeriodNavigator period={statsPeriod} anchor={statsAnchor} today={clock.operationalDate} onPeriod={(value) => { setStatsPeriod(value); setRemoteStats(null); }} onAnchor={(value) => { setStatsAnchor(value); setRemoteStats(null); }} />
+        <PeriodNavigator period={statsPeriod} anchor={statsAnchor} today={today} onPeriod={(value) => { setStatsPeriod(value); setRemoteStats(null); }} onAnchor={(value) => { setStatsAnchor(value); setRemoteStats(null); }} />
         <div className="stats-summary-grid"><Metric label="Jumlah Pesakit" value={busy && !remoteStats ? "…" : periodTotals.cases} accent="emerald" icon="✚" /><Metric label="Purata / Hari" value={averagePerDay(periodTotals.cases, remoteStats?.start, remoteStats?.end)} accent="blue" icon="÷" /><Metric label="Asthma" value={periodTotals.asthma} accent="purple" icon="◌" /></div>
         <section className="level-card"><div className="section-heading"><div><p className="eyebrow">SENSUS L1 – L5</p><h2>Tahap kes</h2></div></div><LevelBarChart totals={periodTotals} /></section>
         <section className="stats-section"><div className="section-heading"><div><p className="eyebrow">MENGIKUT ZON</p><h2>Pecahan pesakit</h2></div></div><div className="zone-stat-grid">{[["Red Zone", periodTotals.merah, "red"], ["Yellow Zone", periodTotals.kuning, "yellow"], ["Green Zone", periodTotals.hijau, "green"]].map(([name, value, tone]) => <article className={`zone-stat zone-stat-${tone}`} key={name}><span>{name}</span><strong>{value}</strong><small>{percentage(Number(value), periodTotals.cases)}% daripada keseluruhan</small></article>)}</div></section>

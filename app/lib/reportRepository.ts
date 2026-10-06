@@ -15,7 +15,7 @@ export type RemoteStats = { period: StatsPeriod; start: string; end: string; tot
 export type RecordPage = { reports: Report[]; nextPageToken: string };
 
 type AuthSession = { idToken: string; refreshToken: string; expiresAt: number };
-type FirestoreDocument = { name?: string; fields?: Record<string, { stringValue?: string; booleanValue?: boolean }> };
+type FirestoreDocument = { name?: string; updateTime?: string; fields?: Record<string, { stringValue?: string; booleanValue?: boolean }> };
 
 function cacheReports(date: string, reports: Report[]) {
   if (typeof window !== "undefined") window.localStorage.setItem(CACHE_KEY, JSON.stringify({ date, reports }));
@@ -177,7 +177,7 @@ export const reportRepository = {
     const reports = await hydrateCalls(sortReports((data.documents || []).map(docToReport).filter((report): report is Report => Boolean(report))));
     return { reports: shift === "Semua" ? reports : reports.filter((report) => report.shift === shift), nextPageToken: data.nextPageToken || "" };
   },
-  async save(report: Report) {
+  async save(report: Report, options?: { expectedUpdatedAt: string | null }) {
     const normalized = normalizeReport(report); normalized.ambulances = normalized.ambulances.map((movement) => ({ ...movement, driver: movement.drivers[0] || movement.driver || "" }));
     delete normalized.callData;
     if (usesPHC(operationalDateForReport(normalized))) {
@@ -186,16 +186,20 @@ export const reportRepository = {
       normalized.calls = state.calls!;
       normalized.callsSource = "phc";
     }
-    const id = `${normalized.date}_${normalized.shift}`; const url = `${baseUrl()}/${encodeURIComponent(id)}`; let created = true;
+    const id = `${normalized.date}_${normalized.shift}`; const url = `${baseUrl()}/${encodeURIComponent(id)}`; let created = true; let revision: string | undefined;
     try {
-      const existing = docToReport(await (await firebaseFetch(url)).json());
+      const document = await (await firebaseFetch(url)).json() as FirestoreDocument;
+      const existing = docToReport(document);
+      if (options && existing && (!options.expectedUpdatedAt || existing.updatedAt !== options.expectedUpdatedAt)) throw new Error("Syif ini telah Final Save atau dikemas kini pada peranti lain. Buka semula laporan dari Firebase dahulu.");
+      revision = document.updateTime;
       created = false;
       if (existing && usesPHC(operationalDateForReport(normalized))) normalized.legacyCalls = existing.legacyCalls || (existing.callsSource !== "phc" ? existing.calls : undefined);
     } catch (error) {
       if (!(error instanceof Error) || !error.message.includes("(404)")) throw error;
     }
     const now = new Date().toISOString(); const saved: Report = { ...normalized, id, createdAt: created ? (normalized.createdAt || now) : normalized.createdAt, updatedAt: now };
-    await firebaseFetch(url, { method: "PATCH", body: JSON.stringify({ fields: { date: { stringValue: saved.date }, shift: { stringValue: saved.shift }, reportJson: { stringValue: JSON.stringify(saved) }, deleted: { booleanValue: false }, updatedAt: { stringValue: saved.updatedAt } } }) });
+    const writeUrl = options ? `${url}?${created ? "currentDocument.exists=false" : revision ? `currentDocument.updateTime=${encodeURIComponent(revision)}` : "currentDocument.exists=true"}` : url;
+    await firebaseFetch(writeUrl, { method: "PATCH", body: JSON.stringify({ fields: { date: { stringValue: saved.date }, shift: { stringValue: saved.shift }, reportJson: { stringValue: JSON.stringify(saved) }, deleted: { booleanValue: false }, updatedAt: { stringValue: saved.updatedAt } } }) });
     clearStatisticsCache();
     return { created, report: usesPHC(operationalDateForReport(saved)) ? reportWithCalls(saved, { status: "ready", calls: saved.calls }) : saved };
   },
