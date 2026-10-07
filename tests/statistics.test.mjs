@@ -9,7 +9,7 @@ test("operational day uses one central 07:00 helper", async () => {
   const operational = await source("app/lib/operationalDate.ts");
   const repository = await source("app/lib/reportRepository.ts");
   assert.match(operational, /OPERATIONAL_DAY_START_HOUR = 7/);
-  assert.match(operational, /parts\.hour < OPERATIONAL_DAY_START_HOUR/);
+  assert.match(operational, /timestampParts\.hour < OPERATIONAL_DAY_START_HOUR/);
   assert.match(repository, /operationalDateForReport\(report\)/);
   assert.doesNotMatch(repository, /onSnapshot|onValue|setInterval/);
 });

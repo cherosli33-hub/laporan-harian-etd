@@ -9,7 +9,7 @@ const CACHE_KEY = "etd-laporan-harian:today-cache:v3";
 const AUTH_KEY = "etd-laporan-harian:firebase-auth:v2";
 const STATS_CACHE_KEY = "etd-laporan-harian:stats-cache:v2";
 
-export type StatsPeriod = "week" | "month" | "year";
+export type StatsPeriod = "day" | "week" | "month" | "year";
 export type StatsTotals = { cases: number; merah: number; kuning: number; hijau: number; l1: number; l2: number; l3: number; l4: number; l5: number; asthma: number; oscc: number; kesBaru: number; kesUlangan: number; ward: number; ambulance: number; calls: number; bid: number; did: number };
 export type RemoteStats = { period: StatsPeriod; start: string; end: string; totals: StatsTotals; groups: Array<{ key: string } & StatsTotals>; reports: Report[]; cacheKey: string; callState?: CallState };
 export type RecordPage = { reports: Report[]; nextPageToken: string };
@@ -116,6 +116,7 @@ const statisticsMemoryCache = new Map<string, RemoteStats>();
 const statisticsRequests = new Map<string, Promise<RemoteStats>>();
 
 function statisticsCacheKey(period: StatsPeriod, start: string, end: string) {
+  if (period === "day") return `daily_${start}`;
   return `${period === "week" ? "weekly" : period === "month" ? "monthly" : "yearly"}_${period === "week" ? `${start}_${end}` : period === "month" ? start.slice(0, 7) : start.slice(0, 4)}`;
 }
 
@@ -159,6 +160,7 @@ function addTotals(total: StatsTotals, report: Report) {
 function dateKey(date: Date) { const y = date.getFullYear(), m = String(date.getMonth() + 1).padStart(2, "0"), d = String(date.getDate()).padStart(2, "0"); return `${y}-${m}-${d}`; }
 export function periodRange(period: StatsPeriod, anchor: string) {
   const [y, m, d] = anchor.split("-").map(Number); const a = new Date(y, (m || 1) - 1, d || 1); let start = new Date(a), end = new Date(a);
+  if (period === "day") return { start: dateKey(a), end: dateKey(a) };
   if (period === "week") { const offset = (a.getDay() + 6) % 7; start.setDate(a.getDate() - offset); end = new Date(start); end.setDate(start.getDate() + 6); }
   else if (period === "month") { start = new Date(a.getFullYear(), a.getMonth(), 1); end = new Date(a.getFullYear(), a.getMonth() + 1, 0); }
   else { start = new Date(a.getFullYear(), 0, 1); end = new Date(a.getFullYear(), 11, 31); }

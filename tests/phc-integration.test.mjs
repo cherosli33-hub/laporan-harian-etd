@@ -25,17 +25,17 @@ for (const name of ['ExportActions', 'CallBreakdown', 'StatsA4', 'Autocomplete']
   await writeFile(path.join(dir,`${name}.mjs`),js);
 }
 let pageSource = await readFile(new URL('../app/page.tsx', import.meta.url), 'utf8');
-pageSource += '\nexport { ReportPreview, CallStatus };';
+pageSource += '\nexport { ReportPreview, CallStatus, PeriodNavigator, shiftPeriodAnchor, periodLabel };';
 let pageJS = ts.transpileModule(pageSource, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX } }).outputText;
 pageJS = pageJS.replace(/from (["'])\.\/components\/(\w+)\1/g, 'from "./$2.mjs"');
 pageJS = pageJS.replace(/from (["'])\.\/lib\/(\w+)\1/g, 'from "./$2.mjs"');
 for (const name of ['react', 'react/jsx-runtime']) pageJS = pageJS.replaceAll(`from "${name}"`, `from "${import.meta.resolve(name)}"`);
 await writeFile(path.join(dir, 'page.mjs'), pageJS);
-const { ReportPreview, CallStatus } = await import(pathToFileURL(path.join(dir, 'page.mjs')));
+const { ReportPreview, CallStatus, PeriodNavigator, shiftPeriodAnchor, periodLabel } = await import(pathToFileURL(path.join(dir, 'page.mjs')));
 const phc = await import(pathToFileURL(path.join(dir, 'phcCalls.mjs')));
 const { emptyReport } = await import(pathToFileURL(path.join(dir, 'types.mjs')));
 const { operationalDateFromTimestamp, operationalDateForReport } = await import(pathToFileURL(path.join(dir, 'operationalDate.mjs')));
-const { reportRepository } = await import(pathToFileURL(path.join(dir, 'reportRepository.mjs')));
+const { reportRepository, periodRange } = await import(pathToFileURL(path.join(dir, 'reportRepository.mjs')));
 const storage = () => { const m = new Map(); return { getItem:k=>m.get(k)||null, setItem:(k,v)=>m.set(k,v), removeItem:k=>m.delete(k) }; };
 globalThis.window = { localStorage:storage(), sessionStorage:storage() };
 let rows = [], etd = [], fail = false, reads = [], writes = [];
@@ -102,6 +102,29 @@ test('K/L/M: form, daily dashboard and week/month/year statistics agree, includi
   assert.equal(phc.reportCallsTotal(form),4); assert.equal(phc.callsTotal((await reportRepository.getCalls('2026-10-03')).calls),4);
   for(const period of ['week','month','year']) { const stats=await reportRepository.getStats(period,'2026-10-03',{refresh:true}); assert.equal(stats.totals.calls,4); assert.equal(stats.groups.reduce((s,g)=>s+g.calls,0),4); }
   etd=[]; assert.equal((await reportRepository.getStats('month','2026-10-03',{refresh:true})).totals.calls,4);
+});
+test('daily statistics combine all three shifts and isolate operational dates without writes',async()=>{
+  const day='2026-10-06';
+  etd=['Pagi','Petang','Malam'].map((shift,i)=>{const r=emptyReport(day,shift); r.stats.l2=i+1;r.stats.merah=i+1;r.stats.hijau=(i+1)*10;r.stats.kesBaru=(i+1)*11;r.stats.oscc=i;r.stats.masukWad=i+1;r.bid=i;r.did=i+1;r.ambulances=Array.from({length:i},()=>({drivers:[]}));return r;});
+  const next=emptyReport('2026-10-07','Pagi');next.stats.hijau=999;
+  etd.push(next);
+  rows=[row('p','awam','pagi',day),row('e','operator','petang',day),row('n','mecc','malam',day),row('prior','awam','malam','2026-10-05'),row('next','awam','pagi','2026-10-07')];
+  const before=writes.length,stats=await reportRepository.getStats('day',day,{refresh:true});
+  assert.deepEqual(periodRange('day',day),{start:day,end:day});
+  assert.equal(stats.cacheKey,'daily_2026-10-06');assert.equal(stats.reports.length,3);
+  assert.equal(stats.totals.cases,66);assert.equal(stats.totals.merah,6);assert.equal(stats.totals.hijau,60);
+  assert.equal(stats.totals.oscc,3);assert.equal(stats.totals.ward,6);assert.equal(stats.totals.ambulance,3);
+  assert.deepEqual(stats.callState.calls,{mecc:1,operator:1,awam:1,palsu:0});assert.equal(stats.totals.calls,3);
+  assert.equal(stats.groups.length,1);assert.equal(stats.groups[0].key,day);assert.equal(stats.groups[0].calls,3);
+  assert.equal(writes.length,before);
+  const adjacent=await reportRepository.getStats('day','2026-10-07');assert.equal(adjacent.cacheKey,'daily_2026-10-07');assert.equal(adjacent.totals.cases,999);
+});
+test('daily navigator selects a date and steps one day across month/year boundaries',()=>{
+  assert.equal(shiftPeriodAnchor('day','2026-10-01',-1),'2026-09-30');
+  assert.equal(shiftPeriodAnchor('day','2026-12-31',1),'2027-01-01');
+  assert.match(periodLabel('day','2026-10-06','2026-10-06'),/6 Oktober 2026/);
+  const html=renderToStaticMarkup(createElement(PeriodNavigator,{period:'day',anchor:'2026-10-06',today:'2026-10-07',onPeriod:()=>{},onAnchor:()=>{}}));
+  assert.match(html,/Harian.*Mingguan.*Bulanan.*Tahunan/);assert.match(html,/type="date" max="2026-10-07" value="2026-10-06"/);
 });
 test('L: mixed historical boundary and fresh PHC edits bypass statistics cache',async()=>{
   const old=emptyReport('2026-10-02','Pagi');old.calls.mecc=7; etd=[old,emptyReport('2026-10-03','Pagi')];rows=[row('1')];

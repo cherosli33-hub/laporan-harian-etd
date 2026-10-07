@@ -4,8 +4,8 @@ const dateLabel = (date:string) => new Intl.DateTimeFormat('ms-MY',{day:'numeric
 export function StatsA4({stats,groups}: {stats:RemoteStats;groups:Array<{key:string}&StatsTotals>}) {
   const t=stats.totals;
   const metrics:Array<[string,number]>=[['L1',t.l1],['L2',t.l2],['L3',t.l3],['L4',t.l4],['L5',t.l5],['Red Zone',t.merah],['Yellow Zone',t.kuning],['Green Zone',t.hijau],['Asthma Bay',t.asthma],['OSCC',t.oscc],['Masuk Wad',t.ward],['Kes Baru',t.kesBaru],['Kes Ulangan',t.kesUlangan],['BID',t.bid],['DID',t.did],['Pergerakan Ambulans & Kenderaan',t.ambulance]];
-  const title=stats.period==='week'?'Mingguan':stats.period==='month'?'Bulanan':'Tahunan';
-  const header=<header className="a4-header"><p>JABATAN KECEMASAN DAN TRAUMA</p><h1>Hospital Kuala Lipis</h1><h2>Laporan Statistik {title}</h2><p>{dateLabel(stats.start)} – {dateLabel(stats.end)} · Semua syif</p></header>;
+  const title=stats.period==='day'?'Harian':stats.period==='week'?'Mingguan':stats.period==='month'?'Bulanan':'Tahunan';
+  const header=<header className="a4-header"><p>JABATAN KECEMASAN DAN TRAUMA</p><h1>Hospital Kuala Lipis</h1><h2>Laporan Statistik {title}</h2><p>{stats.period==='day'?dateLabel(stats.start):`${dateLabel(stats.start)} – ${dateLabel(stats.end)}`} · Semua syif</p></header>;
   const max=Math.max(1,...groups.map(g=>g.cases));
   return <article className="stats-a4" aria-label="Laporan Statistik A4">
     <section className="a4-sheet">{header}<div className="a4-kpis"><div><span>JUMLAH PESAKIT</span><strong>{t.cases}</strong></div><div><span>LAPORAN SYIF DISIMPAN</span><strong>{stats.reports.length}</strong></div></div>
