@@ -61,5 +61,5 @@
 .export-preview .form-card{overflow:visible}
 
 /* Daily statistics extend the existing period controls. */
-.period-panel .period-switch{width:300px}.period-panel-daily{flex-wrap:wrap}.period-panel-daily>.field{min-width:180px;flex:1;margin:0}.period-panel-daily .period-navigation{width:100%}.daily-stats-note{margin:0;color:var(--muted);font-size:12px;line-height:1.5}
+.period-panel .period-switch{width:360px;grid-template-columns:repeat(4,1fr)}.period-panel-daily{flex-wrap:wrap}.period-panel-daily>.field{min-width:180px;flex:1;margin:0}.period-panel-daily .period-navigation{width:100%}.daily-stats-note{margin:0;color:var(--muted);font-size:12px;line-height:1.5}
 @media(max-width:660px){.period-panel .period-switch{width:100%}.period-panel-daily>.field{margin-top:12px}}
