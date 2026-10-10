@@ -17,11 +17,11 @@ for (const name of ['pdfExport', 'whatsapp', 'shiftEngine', 'phcLive', 'types', 
   const js = ts.transpileModule(code, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText.replace(/from (["'])\.\/(\w+)\1/g, 'from "$2.mjs"').replace(/from "(\w+)\.mjs"/g, 'from "./$1.mjs"');
   await writeFile(path.join(dir, `${name}.mjs`), js);
 }
-for (const name of ['ExportActions', 'CallBreakdown', 'StatsA4', 'Autocomplete']) {
+for (const name of ['ExportActions', 'CallBreakdown', 'StatsA4', 'Autocomplete', 'ReplacementStaff']) {
   const source = await readFile(new URL(`../app/components/${name}.tsx`, import.meta.url), 'utf8');
-  let js=ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.ESNext,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX}}).outputText.replace(/from (["'])\.\.\/lib\/(\w+)\1/g,'from "./$2.mjs"').replace(/from (["'])\.\/CallBreakdown\1/g, 'from "./CallBreakdown.mjs"');
+  let js=ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.ESNext,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX}}).outputText.replace(/from (["'])\.\.\/lib\/(\w+)\1/g,'from "./$2.mjs"').replace(/from (["'])\.\/(CallBreakdown|Autocomplete)\1/g, 'from "./$2.mjs"');
   js=js.replace('from "react/jsx-runtime"',`from "${import.meta.resolve('react/jsx-runtime')}"`);
-  for (const dependency of ['react', 'react-dom']) js=js.replaceAll(`from '${dependency}'`, `from '${import.meta.resolve(dependency)}'`);
+  for (const dependency of ['react', 'react-dom']) { js=js.replaceAll(`from '${dependency}'`, `from '${import.meta.resolve(dependency)}'`); js=js.replaceAll(`from "${dependency}"`, `from "${import.meta.resolve(dependency)}"`); }
   await writeFile(path.join(dir,`${name}.mjs`),js);
 }
 let pageSource = await readFile(new URL('../app/page.tsx', import.meta.url), 'utf8');
@@ -184,4 +184,25 @@ test('late night save uses original day; final guard blocks stale drafts and con
  await assert.rejects(reportRepository.save(night,{expectedUpdatedAt:null}),/Final Save/);assert.equal(writes.length,n);
  await assert.rejects(reportRepository.save(night,{expectedUpdatedAt:'stale'}),/Final Save/);assert.equal(writes.length,n);
  await reportRepository.save(saved.report,{expectedUpdatedAt:saved.report.updatedAt});assert.equal(writes.length,n+1);
+});
+
+test('replacement staff survives existing draft/final transport and a fresh read; legacy/empty preview stays compact',async()=>{
+ const {localReportRepository}=await import(pathToFileURL(path.join(dir,'localReportRepository.mjs')));
+ const {normalizeReport}=await import(pathToFileURL(path.join(dir,'types.mjs')));
+ fail=false;rows=[];etd=[];writes=[];
+ const report=emptyReport('2026-10-01','Pagi');
+ report.kakitanganGantiTugas={pemandu:['Pemandu A','Pemandu B'],ppp:['PPP A'],jururawat:['Nurse A'],ppk:['PPK A'],doktor:['Doktor A']};
+ localReportRepository.saveDraft(report);
+ assert.deepEqual(localReportRepository.getDraft(report.id).kakitanganGantiTugas,report.kakitanganGantiTugas);
+ const saved=await reportRepository.save(report);
+ assert.deepEqual(JSON.parse(writes[0].fields.reportJson.stringValue).kakitanganGantiTugas,report.kakitanganGantiTugas);
+ etd=[saved.report];window.localStorage=storage();
+ const read=await reportRepository.getByDate(report.date,false);
+ assert.deepEqual(read[0].kakitanganGantiTugas,report.kakitanganGantiTugas);
+ const html=renderToStaticMarkup(createElement(ReportPreview,{report:read[0]}));
+ for(const name of ['Pemandu A','Pemandu B','PPP A','Nurse A','PPK A','Doktor A'])assert.ok(html.includes(name));
+ assert.ok(html.indexOf('Pemandu A')<html.indexOf('Doktor A'));
+ const legacy=normalizeReport(emptyReport('2026-10-01','Malam'));
+ assert.deepEqual(legacy.kakitanganGantiTugas,{pemandu:[],ppp:[],jururawat:[],ppk:[],doktor:[]});
+ assert.ok(!renderToStaticMarkup(createElement(ReportPreview,{report:legacy})).includes('Kakitangan Ganti Tugas'));
 });

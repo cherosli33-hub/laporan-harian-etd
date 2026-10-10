@@ -5,6 +5,20 @@ export type StatKey =
   | "l1" | "l2" | "l3" | "l4" | "l5"
   | "asthmaBay" | "oscc" | "kesBaru" | "kesUlangan" | "masukWad";
 
+export type ReplacementStaff = { pemandu: string[]; ppp: string[]; jururawat: string[]; ppk: string[]; doktor: string[] };
+export const replacementCategories = [
+  { key: "pemandu", label: "Pemandu Ambulans", category: "Pemandu Ambulans" },
+  { key: "ppp", label: "PPP", category: "PPP" },
+  { key: "jururawat", label: "Jururawat", category: "Nurse/Jururawat" },
+  { key: "ppk", label: "PPK", category: "PPK" },
+  { key: "doktor", label: "Doktor", category: "Pegawai Perubatan" },
+] as const;
+export function replacementNames(report: Pick<Report, "kakitanganGantiTugas">): ReplacementStaff {
+  return Object.fromEntries(replacementCategories.map(({ key }) => [key,
+    Array.isArray(report.kakitanganGantiTugas?.[key]) ? report.kakitanganGantiTugas[key].filter((name): name is string => typeof name === "string") : [],
+  ])) as ReplacementStaff;
+}
+
 export type StaffMember = { id: string; name: string; category: string };
 
 export type VehicleMovement = {
@@ -26,6 +40,7 @@ export type Report = {
   shift: Shift;
   filledBy: string;
   staff: StaffMember[];
+  kakitanganGantiTugas?: ReplacementStaff;
   stats: Record<StatKey, number>;
   carry: { merah: number; kuning: number; hijau: number; observation: number };
   carryNotes: string;
@@ -47,6 +62,7 @@ export type Report = {
 export function normalizeReport(report: Report): Report {
   return {
     ...report,
+    kakitanganGantiTugas: replacementNames(report),
     staff: Array.isArray(report.staff) ? report.staff : [],
     ambulances: (Array.isArray(report.ambulances) ? report.ambulances : []).map((movement) => {
       const drivers = Array.isArray(movement.drivers)
