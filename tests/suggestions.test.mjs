@@ -6,9 +6,9 @@ import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 import ts from 'typescript';
 const dir=await mkdtemp(path.join(tmpdir(),'etd-suggestions-'));
-for(const name of ['masterSuggestions','suggestionStore']){
+for(const name of ['types','masterSuggestions','suggestionStore']){
  const source=await readFile(new URL(`../app/lib/${name}.ts`,import.meta.url),'utf8');
- const js=ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.ESNext,target:ts.ScriptTarget.ES2022}}).outputText.replace("'./masterSuggestions'","'./masterSuggestions.mjs'");
+ const js=ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.ESNext,target:ts.ScriptTarget.ES2022}}).outputText.replace("'./masterSuggestions'","'./masterSuggestions.mjs'").replace("'./types'","'./types.mjs'");
  await writeFile(path.join(dir,name+'.mjs'),js);
 }
 const {masterSuggestions,staffSuggestionKind}=await import(pathToFileURL(path.join(dir,'masterSuggestions.mjs')));

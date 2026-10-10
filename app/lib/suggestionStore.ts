@@ -1,4 +1,4 @@
-import type { Report } from './types';
+import { replacementCategories, replacementNames, type Report } from './types';
 import { masterSuggestions, staffSuggestionKind, type SuggestionKind } from './masterSuggestions';
 export type { SuggestionKind } from './masterSuggestions';
 type Suggestion = { value: string; uses: number; lastUsed: string };
@@ -43,6 +43,7 @@ export const suggestionStore = {
   const data = read(), now = new Date().toISOString();
   add(data, 'people', report.filledBy, now);
   report.staff.forEach(member => add(data, staffSuggestionKind(member.category), member.name, now));
+  replacementCategories.forEach(({ key, category }) => replacementNames(report)[key].forEach(name => add(data, staffSuggestionKind(category), name, now)));
   report.ambulances.forEach(movement => {
    movement.drivers.forEach(driver => add(data, 'drivers', driver, now));
    add(data, 'destinations', movement.destination, now);
